@@ -1,25 +1,12 @@
 #!/usr/bin/env python3
 """
-Telegram Bot - Market Decision Engine
-Six Mandatory Decision Stages
+Telegram Bot - Multi-Timeframe Decision Engine
+H4 → H1 → M15 → M5
 """
 import os
 import telebot
-from data_fetcher import DataFetcher
-from analyzer import DecisionEngine, Decision, Direction
+from mtf_analyzer import MTFDecisionEngine, Decision, Direction
 
-# Markets
-MARKETS = {
-    'gold': 'GC=F',
-    'xauusd': 'GC=F',
-    'ذهب': 'GC=F',
-    'bitcoin': 'BTC-USD',
-    'btcusd': 'BTC-USD',
-    'btc': 'BTC-USD',
-    'بتكوين': 'BTC-USD',
-    'eurusd': 'EURUSD=X',
-    'gbpusd': 'GBPUSD=X',
-}
 
 DECISION_AR = {
     Decision.EXECUTE: "تنفيذ",
@@ -28,197 +15,246 @@ DECISION_AR = {
 }
 
 
-def format_stage(num: int, name: str, result) -> str:
+def format_tf_row(tf_name: str, tf_data) -> str:
+    """Format a single timeframe row"""
+    if tf_data is None:
+        return f"| {tf_name} | ❓ | — | — | — |"
+
+    trend_icon = "🟢" if tf_data.bias == Direction.BUY else "🔴" if tf_data.bias == Direction.SELL else "⚪"
+
+    return f"| {tf_name} | {trend_icon} {tf_data.trend.value} | {tf_data.price:.2f} | {tf_data.rsi:.0f} | {tf_data.price_vs_ema20:+.1f} |"
+
+
+def format_stage(stage) -> str:
     """Format a single stage"""
-    icon = "✅" if result.passed else "❌"
-    text = f"*المرحلة {num} - {name}*\n"
-    text += f"{icon} {result.summary}\n"
-    for detail in result.details:
+    icon = "✅" if stage.passed else "❌"
+
+    text = f"*المرحلة {stage.stage_num} - {stage.name}*\n"
+    text += f"{icon} {stage.summary}\n"
+    text += f"`H4:{stage.h4_status[:15]}`\n"
+    text += f"`H1:{stage.h1_status[:15]}`\n"
+    text += f"`M15:{stage.m15_status[:15]}`\n"
+    text += f"`M5:{stage.m5_status[:15]}`\n"
+
+    for detail in stage.details[:2]:
         text += f"  • {detail}\n"
+
     return text
 
 
-def format_analysis(symbol: str, analysis) -> str:
-    """Format complete 6-stage analysis"""
+def format_mtf_analysis(result) -> str:
+    """Format complete MTF analysis"""
 
     # Decision header
-    if analysis.decision == Decision.EXECUTE:
+    if result.decision == Decision.EXECUTE:
         decision_icon = "🟢"
-    elif analysis.decision == Decision.PREPARE:
+    elif result.decision == Decision.PREPARE:
         decision_icon = "🟡"
     else:
         decision_icon = "🔴"
 
-    decision_ar = DECISION_AR.get(analysis.decision, analysis.decision.value)
+    decision_ar = DECISION_AR.get(result.decision, result.decision.value)
 
     msg = f"{decision_icon} *{decision_ar}*\n"
     msg += f"━━━━━━━━━━━━━━━━━━━━\n"
-    msg += f"*{symbol}* | ${analysis.price:,.2f}\n\n"
+    msg += f"*{result.symbol}*\n"
+    msg += f"📊 التوافق: {result.alignment_score}/4 فريمات\n"
+    msg += f"🧭 الاتجاه: {result.overall_bias.value}\n"
+    msg += f"⏰ {result.fetch_time}\n\n"
 
-    # Stage 1: Context
-    msg += format_stage(1, "السياق", analysis.stage1_context)
+    # Timeframe summary table
+    msg += "*تحليل الفريمات:*\n"
+    msg += "```\n"
+    msg += "| TF  | Trend | Price | RSI | EMA20 |\n"
+    msg += "|-----|-------|-------|-----|-------|\n"
+
+    for tf_name, tf_data in [('H4', result.h4), ('H1', result.h1), ('M15', result.m15), ('M5', result.m5)]:
+        if tf_data:
+            trend_s = tf_data.trend.value[:6]
+            msg += f"| {tf_name} | {trend_s} | {tf_data.price:.0f} | {tf_data.rsi:.0f} | {tf_data.price_vs_ema20:+.1f} |\n"
+        else:
+            msg += f"| {tf_name} | — | — | — | — |\n"
+
+    msg += "```\n\n"
+
+    # 6 Stages
+    stages = [
+        result.stage1_context,
+        result.stage2_location,
+        result.stage3_momentum,
+        result.stage4_behavior,
+        result.stage5_levels,
+        result.stage6_risk
+    ]
+
+    passed_count = sum(1 for s in stages if s.passed)
+    msg += f"*المراحل الست:* {passed_count}/6 ✅\n\n"
+
+    for stage in stages:
+        icon = "✅" if stage.passed else "❌"
+        msg += f"{icon} *{stage.stage_num}. {stage.name}*: {stage.summary}\n"
+
     msg += "\n"
 
-    # Stage 2: Location
-    msg += format_stage(2, "الموقع", analysis.stage2_location)
-    msg += "\n"
-
-    # Stage 3: Momentum
-    msg += format_stage(3, "الزخم", analysis.stage3_momentum)
-    msg += "\n"
-
-    # Stage 4: Behavior
-    msg += format_stage(4, "السلوك", analysis.stage4_behavior)
-    msg += "\n"
-
-    # Stage 5: Technical
-    msg += format_stage(5, "المستويات", analysis.stage5_technical)
-    msg += "\n"
-
-    # Stage 6: Risk
-    msg += format_stage(6, "المخاطرة", analysis.stage6_risk)
-
-    # Trade Plan if EXECUTE
-    if analysis.decision == Decision.EXECUTE and analysis.direction:
-        msg += "\n━━━━━━━━━━━━━━━━━━━━\n"
+    # Trade plan if EXECUTE
+    if result.decision == Decision.EXECUTE and result.direction:
+        msg += "━━━━━━━━━━━━━━━━━━━━\n"
         msg += "*خطة الصفقة:*\n"
-        dir_icon = "🟢" if analysis.direction == Direction.BUY else "🔴"
-        msg += f"`الاتجاه:      {dir_icon} {analysis.direction.value}`\n"
-        msg += f"`الدخول:      ${analysis.entry_zone[0]:,.2f} - ${analysis.entry_zone[1]:,.2f}`\n"
-        msg += f"`وقف الخسارة: ${analysis.stop_loss:,.2f}`\n"
-        msg += f"`الهدف:       ${analysis.target:,.2f}`\n"
-        msg += f"`المخاطرة:    1:{analysis.risk_reward}`\n"
-        msg += f"`المدة:       {analysis.hold_time}`\n"
+        dir_icon = "🟢" if result.direction == Direction.BUY else "🔴"
+        msg += f"`الاتجاه:      {dir_icon} {result.direction.value}`\n"
+        if result.entry_zone:
+            msg += f"`الدخول:      {result.entry_zone[0]:.2f} - {result.entry_zone[1]:.2f}`\n"
+        if result.stop_loss:
+            msg += f"`وقف الخسارة: {result.stop_loss:.2f}`\n"
+        if result.target:
+            msg += f"`الهدف:       {result.target:.2f}`\n"
+        if result.risk_reward:
+            msg += f"`المخاطرة:    1:{result.risk_reward}`\n"
+        if result.hold_time:
+            msg += f"`المدة:       {result.hold_time}`\n"
 
     # Footer
     msg += "\n━━━━━━━━━━━━━━━━━━━━\n"
-    if analysis.decision == Decision.WAIT:
+    if result.decision == Decision.WAIT:
         msg += "_عدم التداول قرار صحيح._"
-    elif analysis.decision == Decision.PREPARE:
-        msg += "_راقب وانتظر اكتمال الشروط._"
+    elif result.decision == Decision.PREPARE:
+        msg += "_راقب وانتظر توافق الفريمات._"
     else:
         msg += "_الحفاظ على رأس المال أولاً._"
 
     return msg
 
 
-def analyze_market(symbol: str) -> str:
-    """Run 6-stage analysis"""
-    resolved = MARKETS.get(symbol.lower(), symbol.upper())
-
-    fetcher = DataFetcher()
-    df = fetcher.fetch_data(resolved, period="1mo", interval="1h")
-
-    if df is None or len(df) < 50:
-        return f"❌ لا توجد بيانات كافية لـ {resolved}"
-
-    engine = DecisionEngine(df, resolved)
-    analysis = engine.analyze()
-
-    return format_analysis(resolved, analysis)
-
-
 def run_bot(token: str):
     """Run the bot"""
     bot = telebot.TeleBot(token)
 
-    @bot.message_handler(commands=['start', 'help', 'ابدأ'])
+    @bot.message_handler(commands=['start', 'help'])
     def start(message):
-        msg = """🎯 *محرك قرارات السوق*
-_6 مراحل إلزامية للتحليل_
+        msg = """🎯 *محرك القرارات متعدد الفريمات*
+_Multi-Timeframe Decision Engine_
+
+*الفريمات:*
+H4 → السياق الأكبر
+H1 → الاتجاه
+M15 → القرار
+M5 → التوقيت
 
 *الأوامر:*
-/gold - الذهب
-/btc - البيتكوين
-/eurusd - يورو/دولار
-/scan - فحص الأسواق
+/btc - تحليل البيتكوين
+/gold - تحليل الذهب
+/eurusd - تحليل EUR/USD
+/scan - فحص جميع الأسواق
+
+*القرارات:*
+🟢 تنفيذ - 4/4 فريمات + 5/6 مراحل
+🟡 استعد - توافق جزئي
+🔴 انتظر - لا توافق
 
 *المراحل الست:*
-1️⃣ السياق (الاتجاه)
+1️⃣ السياق (H4+H1)
 2️⃣ الموقع (EMAs)
 3️⃣ الزخم (RSI)
 4️⃣ السلوك (الشموع)
 5️⃣ المستويات (S/R)
 6️⃣ المخاطرة (R:R)
 
-*القرارات:*
-🟢 تنفيذ - جميع المراحل ناجحة
-🟡 استعد - بعض المراحل ناقصة
-🔴 انتظر - مرحلة أساسية فاشلة
-
 _الحفاظ على رأس المال أولاً._"""
         bot.reply_to(message, msg, parse_mode='Markdown')
 
-    @bot.message_handler(commands=['gold', 'xauusd', 'ذهب'])
-    def gold(message):
-        bot.reply_to(message, "⏳ جاري التحليل بالمراحل الست...")
-        result = analyze_market('gold')
-        bot.send_message(message.chat.id, result, parse_mode='Markdown')
-
-    @bot.message_handler(commands=['btc', 'bitcoin', 'بتكوين'])
+    @bot.message_handler(commands=['btc', 'bitcoin'])
     def btc(message):
-        bot.reply_to(message, "⏳ جاري التحليل بالمراحل الست...")
-        result = analyze_market('btc')
-        bot.send_message(message.chat.id, result, parse_mode='Markdown')
+        bot.reply_to(message, "⏳ جاري تحليل البيتكوين (4 فريمات)...")
+        try:
+            engine = MTFDecisionEngine('BTC-USD')
+            result = engine.analyze()
+            msg = format_mtf_analysis(result)
+            bot.send_message(message.chat.id, msg, parse_mode='Markdown')
+        except Exception as e:
+            bot.send_message(message.chat.id, f"❌ خطأ: {str(e)}")
+
+    @bot.message_handler(commands=['gold', 'xauusd'])
+    def gold(message):
+        bot.reply_to(message, "⏳ جاري تحليل الذهب (4 فريمات)...")
+        try:
+            engine = MTFDecisionEngine('GC=F')
+            result = engine.analyze()
+            msg = format_mtf_analysis(result)
+            bot.send_message(message.chat.id, msg, parse_mode='Markdown')
+        except Exception as e:
+            bot.send_message(message.chat.id, f"❌ خطأ: {str(e)}")
 
     @bot.message_handler(commands=['eurusd'])
     def eurusd(message):
-        bot.reply_to(message, "⏳ جاري التحليل بالمراحل الست...")
-        result = analyze_market('eurusd')
-        bot.send_message(message.chat.id, result, parse_mode='Markdown')
+        bot.reply_to(message, "⏳ جاري تحليل EUR/USD (4 فريمات)...")
+        try:
+            engine = MTFDecisionEngine('EURUSD=X')
+            result = engine.analyze()
+            msg = format_mtf_analysis(result)
+            bot.send_message(message.chat.id, msg, parse_mode='Markdown')
+        except Exception as e:
+            bot.send_message(message.chat.id, f"❌ خطأ: {str(e)}")
 
-    @bot.message_handler(commands=['gbpusd'])
-    def gbpusd(message):
-        bot.reply_to(message, "⏳ جاري التحليل بالمراحل الست...")
-        result = analyze_market('gbpusd')
-        bot.send_message(message.chat.id, result, parse_mode='Markdown')
-
-    @bot.message_handler(commands=['a', 'analyze', 'حلل'])
-    def analyze(message):
-        parts = message.text.split()
-        if len(parts) < 2:
-            bot.reply_to(message, "الاستخدام: /a AAPL")
-            return
-        symbol = parts[1]
-        bot.reply_to(message, f"⏳ جاري تحليل {symbol.upper()}...")
-        result = analyze_market(symbol)
-        bot.send_message(message.chat.id, result, parse_mode='Markdown')
-
-    @bot.message_handler(commands=['scan', 'فحص'])
+    @bot.message_handler(commands=['scan'])
     def scan(message):
         bot.reply_to(message, "⏳ جاري فحص الأسواق...")
 
         results = []
-        for market, name in [('gold', 'الذهب'), ('btc', 'البيتكوين'), ('eurusd', 'EUR/USD')]:
-            resolved = MARKETS.get(market)
-            fetcher = DataFetcher()
-            df = fetcher.fetch_data(resolved, period="1mo", interval="1h")
+        markets = [
+            ('BTC-USD', 'البيتكوين'),
+            ('GC=F', 'الذهب'),
+            ('EURUSD=X', 'EUR/USD')
+        ]
 
-            if df is not None and len(df) >= 50:
-                engine = DecisionEngine(df, resolved)
-                analysis = engine.analyze()
+        for symbol, name in markets:
+            try:
+                engine = MTFDecisionEngine(symbol)
+                result = engine.analyze()
+
+                icon = "🟢" if result.decision == Decision.EXECUTE else "🟡" if result.decision == Decision.PREPARE else "🔴"
+                decision_ar = DECISION_AR.get(result.decision, result.decision.value)
 
                 # Count passed stages
                 stages = [
-                    analysis.stage1_context,
-                    analysis.stage2_location,
-                    analysis.stage3_momentum,
-                    analysis.stage4_behavior,
-                    analysis.stage5_technical,
-                    analysis.stage6_risk
+                    result.stage1_context,
+                    result.stage2_location,
+                    result.stage3_momentum,
+                    result.stage4_behavior,
+                    result.stage5_levels,
+                    result.stage6_risk
                 ]
                 passed = sum(1 for s in stages if s.passed)
 
-                icon = "🟢" if analysis.decision == Decision.EXECUTE else "🟡" if analysis.decision == Decision.PREPARE else "🔴"
-                decision_ar = DECISION_AR.get(analysis.decision, analysis.decision.value)
+                results.append(
+                    f"{icon} *{name}*\n"
+                    f"   {decision_ar} | {result.alignment_score}/4 TF | {passed}/6 مراحل"
+                )
+            except Exception as e:
+                results.append(f"❌ *{name}*: خطأ")
 
-                results.append(f"{icon} *{name}* | {decision_ar} | {passed}/6 مراحل")
-
-        msg = "📊 *فحص الأسواق*\n\n" + "\n".join(results)
+        msg = "📊 *فحص الأسواق (MTF)*\n\n" + "\n\n".join(results)
         msg += "\n\n_استخدم الأمر المحدد للتحليل الكامل_"
         bot.send_message(message.chat.id, msg, parse_mode='Markdown')
 
-    print("Bot is running with 6-stage analysis...")
+    @bot.message_handler(commands=['a', 'analyze'])
+    def analyze(message):
+        parts = message.text.split()
+        if len(parts) < 2:
+            bot.reply_to(message, "الاستخدام: /a SYMBOL\nمثال: /a AAPL")
+            return
+
+        symbol = parts[1].upper()
+        bot.reply_to(message, f"⏳ جاري تحليل {symbol} (4 فريمات)...")
+
+        try:
+            engine = MTFDecisionEngine(symbol)
+            result = engine.analyze()
+            msg = format_mtf_analysis(result)
+            bot.send_message(message.chat.id, msg, parse_mode='Markdown')
+        except Exception as e:
+            bot.send_message(message.chat.id, f"❌ خطأ: {str(e)}")
+
+    print("MTF Bot is running...")
     bot.infinity_polling()
 
 
