@@ -1,17 +1,9 @@
 """
-محلل فرص التداول
-Trading Opportunity Analyzer
+Market Decision Engine
+Capital preservation first. Growth second.
 """
+from .indicators import Indicators
+from .analyzer import DecisionEngine, Decision, Direction, Regime, Analysis
 from .data_fetcher import DataFetcher
-from .indicators import TechnicalIndicators
-from .analyzer import TradingAnalyzer, Signal, TrendDirection, TradeOpportunity
 
-__version__ = "1.0.0"
-__all__ = [
-    "DataFetcher",
-    "TechnicalIndicators",
-    "TradingAnalyzer",
-    "Signal",
-    "TrendDirection",
-    "TradeOpportunity"
-]
+__version__ = "2.0.0"

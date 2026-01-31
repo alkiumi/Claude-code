@@ -1,336 +1,340 @@
 """
-محرك تحليل فرص التداول
+Market Decision Engine
+Capital preservation first. Growth second.
 """
 import pandas as pd
 from dataclasses import dataclass
 from enum import Enum
-from typing import List, Optional
-from indicators import TechnicalIndicators
+from typing import Optional, List
+from indicators import Indicators
 
 
-class Signal(Enum):
-    """إشارات التداول"""
-    STRONG_BUY = "شراء قوي"
-    BUY = "شراء"
-    NEUTRAL = "محايد"
-    SELL = "بيع"
-    STRONG_SELL = "بيع قوي"
+class Decision(Enum):
+    WAIT = "WAIT"
+    PREPARE = "PREPARE"
+    EXECUTE = "EXECUTE"
 
 
-class TrendDirection(Enum):
-    """اتجاه السوق"""
-    UPTREND = "صاعد"
-    DOWNTREND = "هابط"
-    SIDEWAYS = "عرضي"
+class Regime(Enum):
+    TREND_UP = "Uptrend"
+    TREND_DOWN = "Downtrend"
+    RANGE = "Range"
+    CORRECTION = "Correction"
+    UNCLEAR = "Unclear"
+
+
+class Direction(Enum):
+    BUY = "BUY"
+    SELL = "SELL"
 
 
 @dataclass
-class TradeOpportunity:
-    """فرصة تداول"""
-    symbol: str
-    signal: Signal
-    confidence: float  # 0-100
-    entry_price: float
-    stop_loss: float
-    take_profit_1: float
-    take_profit_2: float
-    take_profit_3: float
-    risk_reward_ratio: float
+class Analysis:
+    decision: Decision
+    direction: Optional[Direction]
+    regime: Regime
+
+    # For EXECUTE
+    entry_zone: Optional[tuple]  # (low, high)
+    stop_loss: Optional[float]
+    target: Optional[float]
+    risk_reward: Optional[float]
+    hold_time: Optional[str]
+
+    # Context
     reasons: List[str]
-    trend: TrendDirection
+    missing_conditions: List[str]
+    watch_levels: List[str]
+
+    # Raw data
+    price: float
+    ema_20: float
+    ema_50: float
+    rsi: float
+    atr: float
 
 
-class TradingAnalyzer:
-    """محلل فرص التداول"""
+class DecisionEngine:
+    """
+    Elite discretionary trader + risk manager.
+    Thinks in scenarios, not signals.
+    """
 
     def __init__(self, df: pd.DataFrame, symbol: str):
         self.symbol = symbol
-        self.indicators = TechnicalIndicators(df)
-        self.df = self.indicators.get_data()
-        self.latest = self.indicators.get_latest_values()
-        self.crossovers = self.indicators.detect_crossovers()
+        self.ind = Indicators(df)
+        self.data = self.ind.current()
+        self.candles = self.ind.recent_candles(10)
 
-    def analyze(self) -> TradeOpportunity:
-        """تحليل شامل وإنتاج فرصة تداول"""
-        # تحديد الاتجاه
-        trend = self._determine_trend()
+    def analyze(self) -> Analysis:
+        # Step 1: Determine market regime
+        regime = self._assess_regime()
 
-        # حساب النقاط لكل مؤشر
-        scores = {
-            'rsi': self._analyze_rsi(),
-            'macd': self._analyze_macd(),
-            'ma': self._analyze_moving_averages(),
-            'bb': self._analyze_bollinger(),
-            'stoch': self._analyze_stochastic(),
-            'trend': self._analyze_trend_strength()
-        }
+        # Step 2: Evaluate all conditions
+        conditions = self._evaluate_conditions(regime)
 
-        # حساب الإشارة النهائية
-        total_score = sum(scores.values())
-        signal, confidence = self._calculate_signal(total_score)
+        # Step 3: Make decision
+        decision, direction = self._make_decision(regime, conditions)
 
-        # جمع الأسباب
-        reasons = self._collect_reasons(scores)
+        # Step 4: Build trade plan if EXECUTE
+        entry_zone, sl, target, rr, hold_time = None, None, None, None, None
+        if decision == Decision.EXECUTE and direction:
+            entry_zone, sl, target, rr, hold_time = self._build_trade_plan(direction)
 
-        # حساب نقاط الدخول والخروج
-        entry, sl, tp1, tp2, tp3 = self._calculate_levels(signal)
-
-        # حساب نسبة المخاطرة للعائد
-        risk = abs(entry - sl)
-        reward = abs(tp1 - entry)
-        rr_ratio = reward / risk if risk > 0 else 0
-
-        return TradeOpportunity(
-            symbol=self.symbol,
-            signal=signal,
-            confidence=confidence,
-            entry_price=entry,
+        # Step 5: Compile analysis
+        return Analysis(
+            decision=decision,
+            direction=direction,
+            regime=regime,
+            entry_zone=entry_zone,
             stop_loss=sl,
-            take_profit_1=tp1,
-            take_profit_2=tp2,
-            take_profit_3=tp3,
-            risk_reward_ratio=rr_ratio,
-            reasons=reasons,
-            trend=trend
+            target=target,
+            risk_reward=rr,
+            hold_time=hold_time,
+            reasons=conditions['reasons'],
+            missing_conditions=conditions['missing'],
+            watch_levels=conditions['watch'],
+            price=self.data['close'],
+            ema_20=self.data['ema_20'],
+            ema_50=self.data['ema_50'],
+            rsi=self.data['rsi'],
+            atr=self.data['atr']
         )
 
-    def _determine_trend(self) -> TrendDirection:
-        """تحديد اتجاه السوق"""
-        close = self.latest['close']
-        sma_20 = self.latest['sma_20']
-        sma_50 = self.latest['sma_50']
+    def _assess_regime(self) -> Regime:
+        """Determine market regime from structure"""
+        ema_20 = self.data['ema_20']
+        ema_50 = self.data['ema_50']
+        close = self.data['close']
+        slope_20 = self.data['ema_20_slope']
+        slope_50 = self.data['ema_50_slope']
+        separation = abs(self.data['ema_separation'])
+        atr = self.data['atr']
 
-        if pd.isna(sma_50):
-            if close > sma_20:
-                return TrendDirection.UPTREND
+        # EMAs aligned and sloping same direction = trend
+        if ema_20 > ema_50 and slope_20 > 0 and slope_50 > 0:
+            if separation > atr * 0.5:
+                return Regime.TREND_UP
             else:
-                return TrendDirection.DOWNTREND
+                return Regime.CORRECTION  # Weak trend
 
-        if close > sma_20 > sma_50:
-            return TrendDirection.UPTREND
-        elif close < sma_20 < sma_50:
-            return TrendDirection.DOWNTREND
-        else:
-            return TrendDirection.SIDEWAYS
-
-    def _analyze_rsi(self) -> float:
-        """تحليل RSI - نطاق من -2 إلى +2"""
-        rsi = self.latest['rsi']
-        if pd.isna(rsi):
-            return 0
-
-        if rsi < 30:
-            return 2  # oversold - إشارة شراء
-        elif rsi < 40:
-            return 1
-        elif rsi > 70:
-            return -2  # overbought - إشارة بيع
-        elif rsi > 60:
-            return -1
-        return 0
-
-    def _analyze_macd(self) -> float:
-        """تحليل MACD - نطاق من -2 إلى +2"""
-        score = 0
-        histogram = self.latest['macd_histogram']
-
-        if pd.isna(histogram):
-            return 0
-
-        # اتجاه الهيستوجرام
-        if histogram > 0:
-            score += 1
-        else:
-            score -= 1
-
-        # التقاطعات
-        if self.crossovers['macd_bullish_cross']:
-            score += 1
-        elif self.crossovers['macd_bearish_cross']:
-            score -= 1
-
-        return max(-2, min(2, score))
-
-    def _analyze_moving_averages(self) -> float:
-        """تحليل المتوسطات المتحركة - نطاق من -2 إلى +2"""
-        score = 0
-        close = self.latest['close']
-        ema_12 = self.latest['ema_12']
-        ema_26 = self.latest['ema_26']
-        sma_50 = self.latest['sma_50']
-
-        # السعر فوق/تحت EMAs
-        if not pd.isna(ema_12):
-            if close > ema_12:
-                score += 0.5
+        if ema_20 < ema_50 and slope_20 < 0 and slope_50 < 0:
+            if separation > atr * 0.5:
+                return Regime.TREND_DOWN
             else:
-                score -= 0.5
+                return Regime.CORRECTION
 
-        if not pd.isna(ema_26):
-            if close > ema_26:
-                score += 0.5
-            else:
-                score -= 0.5
+        # EMAs flat and close together = range
+        if abs(slope_20) < atr * 0.1 and abs(slope_50) < atr * 0.1:
+            if separation < atr * 0.3:
+                return Regime.RANGE
 
-        # ترتيب EMAs
-        if not pd.isna(ema_12) and not pd.isna(ema_26):
-            if ema_12 > ema_26:
-                score += 0.5
-            else:
-                score -= 0.5
+        # EMAs crossing or conflicting slopes
+        if (slope_20 > 0 and slope_50 < 0) or (slope_20 < 0 and slope_50 > 0):
+            return Regime.CORRECTION
 
-        # التقاطعات
-        if self.crossovers['ema_bullish_cross']:
-            score += 0.5
-        elif self.crossovers['ema_bearish_cross']:
-            score -= 0.5
+        return Regime.UNCLEAR
 
-        return max(-2, min(2, score))
+    def _evaluate_conditions(self, regime: Regime) -> dict:
+        """Evaluate all 6 decision framework points"""
+        close = self.data['close']
+        ema_20 = self.data['ema_20']
+        ema_50 = self.data['ema_50']
+        rsi = self.data['rsi']
+        atr = self.data['atr']
+        slope_20 = self.data['ema_20_slope']
 
-    def _analyze_bollinger(self) -> float:
-        """تحليل نطاقات بولينجر - نطاق من -2 إلى +2"""
-        close = self.latest['close']
-        bb_upper = self.latest['bb_upper']
-        bb_lower = self.latest['bb_lower']
-
-        if pd.isna(bb_upper) or pd.isna(bb_lower):
-            return 0
-
-        bb_range = bb_upper - bb_lower
-        position = (close - bb_lower) / bb_range if bb_range > 0 else 0.5
-
-        if position < 0.1:
-            return 2  # قرب الحد السفلي - فرصة شراء
-        elif position < 0.3:
-            return 1
-        elif position > 0.9:
-            return -2  # قرب الحد العلوي - فرصة بيع
-        elif position > 0.7:
-            return -1
-        return 0
-
-    def _analyze_stochastic(self) -> float:
-        """تحليل ستوكاستيك - نطاق من -2 إلى +2"""
-        stoch_k = self.latest['stoch_k']
-        score = 0
-
-        if pd.isna(stoch_k):
-            return 0
-
-        if stoch_k < 20:
-            score += 1.5
-        elif stoch_k < 30:
-            score += 0.5
-        elif stoch_k > 80:
-            score -= 1.5
-        elif stoch_k > 70:
-            score -= 0.5
-
-        if self.crossovers['stoch_bullish_cross']:
-            score += 0.5
-        elif self.crossovers['stoch_bearish_cross']:
-            score -= 0.5
-
-        return max(-2, min(2, score))
-
-    def _analyze_trend_strength(self) -> float:
-        """تحليل قوة الاتجاه"""
-        trend = self._determine_trend()
-        if trend == TrendDirection.UPTREND:
-            return 1
-        elif trend == TrendDirection.DOWNTREND:
-            return -1
-        return 0
-
-    def _calculate_signal(self, total_score: float) -> tuple:
-        """حساب الإشارة النهائية ودرجة الثقة"""
-        # المجموع الأقصى هو ±11 تقريباً
-        if total_score >= 6:
-            return Signal.STRONG_BUY, min(95, 60 + total_score * 3)
-        elif total_score >= 3:
-            return Signal.BUY, min(80, 50 + total_score * 4)
-        elif total_score <= -6:
-            return Signal.STRONG_SELL, min(95, 60 + abs(total_score) * 3)
-        elif total_score <= -3:
-            return Signal.SELL, min(80, 50 + abs(total_score) * 4)
-        else:
-            return Signal.NEUTRAL, 50 - abs(total_score) * 5
-
-    def _calculate_levels(self, signal: Signal) -> tuple:
-        """حساب مستويات الدخول والخروج"""
-        close = self.latest['close']
-        atr = self.latest['atr']
-
-        if pd.isna(atr):
-            atr = close * 0.02  # 2% كقيمة افتراضية
-
-        if signal in [Signal.STRONG_BUY, Signal.BUY]:
-            entry = close
-            stop_loss = close - (atr * 1.5)
-            tp1 = close + (atr * 1.5)
-            tp2 = close + (atr * 2.5)
-            tp3 = close + (atr * 4)
-        elif signal in [Signal.STRONG_SELL, Signal.SELL]:
-            entry = close
-            stop_loss = close + (atr * 1.5)
-            tp1 = close - (atr * 1.5)
-            tp2 = close - (atr * 2.5)
-            tp3 = close - (atr * 4)
-        else:
-            entry = close
-            stop_loss = close - (atr * 1)
-            tp1 = close + (atr * 1)
-            tp2 = close + (atr * 1.5)
-            tp3 = close + (atr * 2)
-
-        return entry, stop_loss, tp1, tp2, tp3
-
-    def _collect_reasons(self, scores: dict) -> List[str]:
-        """جمع أسباب التوصية"""
         reasons = []
-        rsi = self.latest['rsi']
-        stoch_k = self.latest['stoch_k']
+        missing = []
+        watch = []
 
-        if scores['rsi'] >= 1.5:
-            reasons.append(f"RSI في منطقة التشبع البيعي ({rsi:.1f})")
-        elif scores['rsi'] <= -1.5:
-            reasons.append(f"RSI في منطقة التشبع الشرائي ({rsi:.1f})")
+        # 1. Market regime
+        if regime in [Regime.TREND_UP, Regime.TREND_DOWN]:
+            reasons.append(f"Clear {regime.value} regime")
+        elif regime == Regime.RANGE:
+            missing.append("No clear trend - range bound")
+        elif regime == Regime.CORRECTION:
+            missing.append("Market in correction phase")
+        else:
+            missing.append("Regime unclear - no trade")
 
-        if self.crossovers['macd_bullish_cross']:
-            reasons.append("تقاطع صعودي لـ MACD")
-        elif self.crossovers['macd_bearish_cross']:
-            reasons.append("تقاطع هبوطي لـ MACD")
+        # 2. Price location relative to EMAs
+        price_vs_ema20 = (close - ema_20) / atr
+        price_vs_ema50 = (close - ema_50) / atr
 
-        if self.crossovers['ema_bullish_cross']:
-            reasons.append("تقاطع صعودي للمتوسطات المتحركة")
-        elif self.crossovers['ema_bearish_cross']:
-            reasons.append("تقاطع هبوطي للمتوسطات المتحركة")
+        if regime == Regime.TREND_UP:
+            if 0 < price_vs_ema20 < 1.5:
+                reasons.append("Price in healthy position above EMA 20")
+            elif price_vs_ema20 > 2:
+                missing.append("Price overextended from EMA 20")
+                watch.append(f"Wait for pullback to {ema_20:.2f}")
+            elif price_vs_ema20 < 0:
+                watch.append(f"Price below EMA 20 - watch for reclaim at {ema_20:.2f}")
 
-        if scores['bb'] >= 1.5:
-            reasons.append("السعر قرب الحد السفلي لبولينجر")
-        elif scores['bb'] <= -1.5:
-            reasons.append("السعر قرب الحد العلوي لبولينجر")
+        if regime == Regime.TREND_DOWN:
+            if -1.5 < price_vs_ema20 < 0:
+                reasons.append("Price in healthy position below EMA 20")
+            elif price_vs_ema20 < -2:
+                missing.append("Price overextended from EMA 20")
+                watch.append(f"Wait for pullback to {ema_20:.2f}")
+            elif price_vs_ema20 > 0:
+                watch.append(f"Price above EMA 20 - watch for rejection at {ema_20:.2f}")
 
-        if scores['stoch'] >= 1:
-            reasons.append(f"ستوكاستيك في منطقة التشبع البيعي ({stoch_k:.1f})")
-        elif scores['stoch'] <= -1:
-            reasons.append(f"ستوكاستيك في منطقة التشبع الشرائي ({stoch_k:.1f})")
+        # 3. EMA slope and separation
+        if abs(slope_20) > atr * 0.2:
+            reasons.append("EMA 20 showing strong slope")
+        else:
+            missing.append("EMA 20 slope weak - momentum lacking")
 
-        trend = self._determine_trend()
-        reasons.append(f"الاتجاه العام: {trend.value}")
+        # 4. RSI momentum
+        rsi_prev = self.data['prev_rsi']
+        rsi_direction = rsi - rsi_prev
 
-        return reasons
+        if regime == Regime.TREND_UP:
+            if 40 < rsi < 70:
+                reasons.append(f"RSI ({rsi:.1f}) in bullish zone")
+                if rsi_direction > 0:
+                    reasons.append("RSI momentum rising")
+            elif rsi > 75:
+                missing.append(f"RSI ({rsi:.1f}) overheated")
+            elif rsi < 40:
+                missing.append(f"RSI ({rsi:.1f}) too weak for uptrend")
 
+        if regime == Regime.TREND_DOWN:
+            if 30 < rsi < 60:
+                reasons.append(f"RSI ({rsi:.1f}) in bearish zone")
+                if rsi_direction < 0:
+                    reasons.append("RSI momentum falling")
+            elif rsi < 25:
+                missing.append(f"RSI ({rsi:.1f}) oversold")
+            elif rsi > 60:
+                missing.append(f"RSI ({rsi:.1f}) too strong for downtrend")
 
-if __name__ == "__main__":
-    from data_fetcher import DataFetcher
-    fetcher = DataFetcher()
-    data = fetcher.fetch_data("AAPL")
-    if data is not None:
-        analyzer = TradingAnalyzer(data, "AAPL")
-        opportunity = analyzer.analyze()
-        print(f"الإشارة: {opportunity.signal.value}")
-        print(f"الثقة: {opportunity.confidence:.1f}%")
-        print(f"نقطة الدخول: {opportunity.entry_price:.2f}")
-        print(f"وقف الخسارة: {opportunity.stop_loss:.2f}")
-        print(f"الهدف الأول: {opportunity.take_profit_1:.2f}")
+        # 5. Price behavior (recent candles)
+        price_behavior = self._analyze_price_behavior()
+        if price_behavior['rejection']:
+            reasons.append(f"Price rejection at key level")
+        if price_behavior['compression']:
+            watch.append("Price compressing - breakout imminent")
+        if price_behavior['acceptance']:
+            reasons.append("Price accepting current level")
+
+        # 6. Risk-reward viability checked in trade plan
+
+        return {
+            'reasons': reasons,
+            'missing': missing,
+            'watch': watch,
+            'score': len(reasons) - len(missing)
+        }
+
+    def _analyze_price_behavior(self) -> dict:
+        """Analyze recent candles for rejection, acceptance, compression"""
+        candles = self.candles
+        atr = self.data['atr']
+
+        behavior = {
+            'rejection': False,
+            'acceptance': False,
+            'compression': False
+        }
+
+        if len(candles) < 3:
+            return behavior
+
+        # Check for rejection (long wicks)
+        last = candles.iloc[-1]
+        body = abs(last['close'] - last['open'])
+        upper_wick = last['high'] - max(last['close'], last['open'])
+        lower_wick = min(last['close'], last['open']) - last['low']
+
+        if upper_wick > body * 2:
+            behavior['rejection'] = True  # Upper rejection
+        if lower_wick > body * 2:
+            behavior['rejection'] = True  # Lower rejection
+
+        # Check for compression (decreasing ranges)
+        ranges = candles['high'] - candles['low']
+        if len(ranges) >= 5:
+            if ranges.iloc[-1] < ranges.iloc[-5] * 0.6:
+                behavior['compression'] = True
+
+        # Check for acceptance (closing near highs/lows consistently)
+        recent_closes = candles.tail(3)
+        close_positions = (recent_closes['close'] - recent_closes['low']) / (recent_closes['high'] - recent_closes['low'])
+        if close_positions.mean() > 0.7 or close_positions.mean() < 0.3:
+            behavior['acceptance'] = True
+
+        return behavior
+
+    def _make_decision(self, regime: Regime, conditions: dict) -> tuple:
+        """Final decision logic"""
+        score = conditions['score']
+        reasons = conditions['reasons']
+        missing = conditions['missing']
+
+        # Never trade unclear regime
+        if regime == Regime.UNCLEAR:
+            return Decision.WAIT, None
+
+        # Need clear trend for execution
+        if regime not in [Regime.TREND_UP, Regime.TREND_DOWN]:
+            if conditions['watch']:
+                return Decision.PREPARE, None
+            return Decision.WAIT, None
+
+        # Need positive score and no critical missing conditions
+        critical_missing = [m for m in missing if 'overextended' in m.lower() or 'overheated' in m.lower() or 'oversold' in m.lower()]
+
+        if critical_missing:
+            return Decision.PREPARE, None
+
+        if score >= 3:
+            direction = Direction.BUY if regime == Regime.TREND_UP else Direction.SELL
+            return Decision.EXECUTE, direction
+
+        if score >= 1:
+            return Decision.PREPARE, None
+
+        return Decision.WAIT, None
+
+    def _build_trade_plan(self, direction: Direction) -> tuple:
+        """Build concrete trade plan with ATR-based stops"""
+        close = self.data['close']
+        atr = self.data['atr']
+        ema_20 = self.data['ema_20']
+
+        if direction == Direction.BUY:
+            # Entry zone: current price to slightly below
+            entry_low = close - atr * 0.3
+            entry_high = close + atr * 0.2
+            entry_zone = (entry_low, entry_high)
+
+            # Stop: below recent structure or 1.5 ATR
+            sl = min(ema_20 - atr * 0.5, close - atr * 1.5)
+
+            # Target: minimum 1.5 RR
+            risk = close - sl
+            target = close + risk * 1.8
+
+            rr = (target - close) / (close - sl)
+
+        else:  # SELL
+            entry_low = close - atr * 0.2
+            entry_high = close + atr * 0.3
+            entry_zone = (entry_low, entry_high)
+
+            sl = max(ema_20 + atr * 0.5, close + atr * 1.5)
+
+            risk = sl - close
+            target = close - risk * 1.8
+
+            rr = (close - target) / (sl - close)
+
+        # Validate RR
+        if rr < 1.5:
+            return None, None, None, None, None
+
+        hold_time = "2-6 hours based on ATR velocity"
+
+        return entry_zone, sl, target, round(rr, 2), hold_time
