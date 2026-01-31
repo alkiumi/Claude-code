@@ -60,7 +60,14 @@ def format_mtf_analysis(result) -> str:
     msg += f"*{result.symbol}*\n"
     msg += f"📊 التوافق: {result.alignment_score}/4 فريمات\n"
     msg += f"🧭 الاتجاه: {result.overall_bias.value}\n"
-    msg += f"⏰ {result.fetch_time}\n\n"
+    msg += f"⏰ {result.fetch_time}\n"
+
+    # Show data sources
+    if hasattr(result, 'sources_used') and result.sources_used:
+        sources_str = ', '.join(result.sources_used)
+        msg += f"📡 المصادر: `{sources_str}`\n"
+
+    msg += "\n"
 
     # Timeframe summary table
     msg += "*تحليل الفريمات:*\n"

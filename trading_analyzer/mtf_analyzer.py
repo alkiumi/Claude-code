@@ -1,13 +1,18 @@
 """
 Multi-Timeframe Analyzer
 6 Stages across H4, H1, M15, M5
+
+Data Sources:
+- Binance API (Crypto - Real-time)
+- Alpha Vantage (Forex)
+- Yahoo Finance (Fallback)
 """
 import pandas as pd
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Optional, List, Dict
 from indicators import Indicators
-from mtf_data import MTFDataFetcher
+from data_providers import MultiSourceDataManager, create_data_manager
 
 
 class Decision(Enum):
@@ -70,13 +75,7 @@ class MTFAnalysis:
     symbol: str
     fetch_time: str
 
-    # Timeframe analyses
-    h4: Optional[TimeframeAnalysis]
-    h1: Optional[TimeframeAnalysis]
-    m15: Optional[TimeframeAnalysis]
-    m5: Optional[TimeframeAnalysis]
-
-    # 6 Stages
+    # 6 Stages (required)
     stage1_context: StageResult
     stage2_location: StageResult
     stage3_momentum: StageResult
@@ -90,14 +89,25 @@ class MTFAnalysis:
 
     # Final decision
     decision: Decision
-    direction: Optional[Direction]
+
+    # Optional fields with defaults
+    asset_type: str = "unknown"
+    sources_used: List[str] = field(default_factory=list)
+
+    # Timeframe analyses
+    h4: Optional[TimeframeAnalysis] = None
+    h1: Optional[TimeframeAnalysis] = None
+    m15: Optional[TimeframeAnalysis] = None
+    m5: Optional[TimeframeAnalysis] = None
+
+    direction: Optional[Direction] = None
 
     # Trade plan
-    entry_zone: Optional[tuple]
-    stop_loss: Optional[float]
-    target: Optional[float]
-    risk_reward: Optional[float]
-    hold_time: Optional[str]
+    entry_zone: Optional[tuple] = None
+    stop_loss: Optional[float] = None
+    target: Optional[float] = None
+    risk_reward: Optional[float] = None
+    hold_time: Optional[str] = None
 
 
 class MTFDecisionEngine:
@@ -107,19 +117,24 @@ class MTFDecisionEngine:
     H1 → Trend Direction
     M15 → Decision
     M5 → Timing
+
+    Data Sources:
+    - Binance API (Crypto - Real-time)
+    - Alpha Vantage (Forex)
+    - Yahoo Finance (Fallback)
     """
 
-    def __init__(self, symbol: str):
+    def __init__(self, symbol: str, alpha_vantage_key: str = None):
         self.symbol = symbol
-        self.fetcher = MTFDataFetcher()
+        self.data_manager = create_data_manager(alpha_vantage_key)
         self.data = None
         self.tf_analyses = {}
 
     def analyze(self) -> MTFAnalysis:
         """Run complete MTF analysis"""
 
-        # Step 1: Fetch all timeframes
-        self.data = self.fetcher.fetch_mtf_data(self.symbol)
+        # Step 1: Fetch all timeframes (auto-selects best source)
+        self.data = self.data_manager.fetch_mtf_data(self.symbol)
 
         # Step 2: Analyze each timeframe
         self.tf_analyses = {}
@@ -153,6 +168,8 @@ class MTFDecisionEngine:
         return MTFAnalysis(
             symbol=self.data['symbol'],
             fetch_time=self.data['fetch_time'],
+            asset_type=self.data.get('asset_type', 'unknown'),
+            sources_used=self.data.get('sources_used', []),
             h4=self.tf_analyses.get('H4'),
             h1=self.tf_analyses.get('H1'),
             m15=self.tf_analyses.get('M15'),
