@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Telegram Bot - Market Decision Engine
-Arabic Interface
+Six Mandatory Decision Stages
 """
 import os
 import telebot
@@ -21,25 +21,27 @@ MARKETS = {
     'gbpusd': 'GBPUSD=X',
 }
 
-# Arabic translations
 DECISION_AR = {
     Decision.EXECUTE: "تنفيذ",
     Decision.PREPARE: "استعد",
     Decision.WAIT: "انتظر",
 }
 
-REGIME_AR = {
-    "Uptrend": "صاعد",
-    "Downtrend": "هابط",
-    "Range": "عرضي",
-    "Correction": "تصحيح",
-    "Unclear": "غير واضح",
-}
+
+def format_stage(num: int, name: str, result) -> str:
+    """Format a single stage"""
+    icon = "✅" if result.passed else "❌"
+    text = f"*المرحلة {num} - {name}*\n"
+    text += f"{icon} {result.summary}\n"
+    for detail in result.details:
+        text += f"  • {detail}\n"
+    return text
 
 
 def format_analysis(symbol: str, analysis) -> str:
-    """Format analysis in Arabic"""
+    """Format complete 6-stage analysis"""
 
+    # Decision header
     if analysis.decision == Decision.EXECUTE:
         decision_icon = "🟢"
     elif analysis.decision == Decision.PREPARE:
@@ -47,113 +49,68 @@ def format_analysis(symbol: str, analysis) -> str:
     else:
         decision_icon = "🔴"
 
-    dir_icon = ""
-    if analysis.direction:
-        dir_icon = "📈" if analysis.direction == Direction.BUY else "📉"
-
     decision_ar = DECISION_AR.get(analysis.decision, analysis.decision.value)
-    regime_ar = REGIME_AR.get(analysis.regime.value, analysis.regime.value)
 
-    msg = f"""{decision_icon} *{decision_ar}* {dir_icon}
+    msg = f"{decision_icon} *{decision_ar}*\n"
+    msg += f"━━━━━━━━━━━━━━━━━━━━\n"
+    msg += f"*{symbol}* | ${analysis.price:,.2f}\n\n"
 
-*{symbol}* | {regime_ar}
+    # Stage 1: Context
+    msg += format_stage(1, "السياق", analysis.stage1_context)
+    msg += "\n"
 
-`السعر:    ${analysis.price:,.2f}`
-`EMA 20:  ${analysis.ema_20:,.2f}`
-`EMA 50:  ${analysis.ema_50:,.2f}`
-`RSI:     {analysis.rsi:.1f}`
-`ATR:     ${analysis.atr:,.2f}`"""
+    # Stage 2: Location
+    msg += format_stage(2, "الموقع", analysis.stage2_location)
+    msg += "\n"
 
+    # Stage 3: Momentum
+    msg += format_stage(3, "الزخم", analysis.stage3_momentum)
+    msg += "\n"
+
+    # Stage 4: Behavior
+    msg += format_stage(4, "السلوك", analysis.stage4_behavior)
+    msg += "\n"
+
+    # Stage 5: Technical
+    msg += format_stage(5, "المستويات", analysis.stage5_technical)
+    msg += "\n"
+
+    # Stage 6: Risk
+    msg += format_stage(6, "المخاطرة", analysis.stage6_risk)
+
+    # Trade Plan if EXECUTE
     if analysis.decision == Decision.EXECUTE and analysis.direction:
-        dir_text = "🟢 شراء" if analysis.direction == Direction.BUY else "🔴 بيع"
-        msg += f"""
+        msg += "\n━━━━━━━━━━━━━━━━━━━━\n"
+        msg += "*خطة الصفقة:*\n"
+        dir_icon = "🟢" if analysis.direction == Direction.BUY else "🔴"
+        msg += f"`الاتجاه:      {dir_icon} {analysis.direction.value}`\n"
+        msg += f"`الدخول:      ${analysis.entry_zone[0]:,.2f} - ${analysis.entry_zone[1]:,.2f}`\n"
+        msg += f"`وقف الخسارة: ${analysis.stop_loss:,.2f}`\n"
+        msg += f"`الهدف:       ${analysis.target:,.2f}`\n"
+        msg += f"`المخاطرة:    1:{analysis.risk_reward}`\n"
+        msg += f"`المدة:       {analysis.hold_time}`\n"
 
-*خطة الصفقة:*
-`الاتجاه:     {dir_text}`
-`الدخول:     ${analysis.entry_zone[0]:,.2f} - ${analysis.entry_zone[1]:,.2f}`
-`وقف الخسارة: ${analysis.stop_loss:,.2f}`
-`الهدف:      ${analysis.target:,.2f}`
-`المخاطرة:   1:{analysis.risk_reward}`"""
-
-    if analysis.reasons:
-        msg += "\n\n✅ *الأسباب:*\n"
-        for r in analysis.reasons:
-            # Translate common reasons
-            r_ar = translate_reason(r)
-            msg += f"• {r_ar}\n"
-
-    if analysis.missing_conditions:
-        msg += "\n❌ *ينقص:*\n"
-        for m in analysis.missing_conditions:
-            m_ar = translate_reason(m)
-            msg += f"• {m_ar}\n"
-
-    if analysis.watch_levels:
-        msg += "\n👀 *راقب:*\n"
-        for w in analysis.watch_levels:
-            w_ar = translate_reason(w)
-            msg += f"• {w_ar}\n"
-
+    # Footer
+    msg += "\n━━━━━━━━━━━━━━━━━━━━\n"
     if analysis.decision == Decision.WAIT:
-        msg += "\n_عدم التداول قرار صحيح._"
+        msg += "_عدم التداول قرار صحيح._"
+    elif analysis.decision == Decision.PREPARE:
+        msg += "_راقب وانتظر اكتمال الشروط._"
+    else:
+        msg += "_الحفاظ على رأس المال أولاً._"
 
     return msg
 
 
-def translate_reason(text: str) -> str:
-    """Translate common reasons to Arabic"""
-    translations = {
-        "Clear Uptrend regime": "اتجاه صاعد واضح",
-        "Clear Downtrend regime": "اتجاه هابط واضح",
-        "Price in healthy position above EMA 20": "السعر في موقع صحي فوق EMA 20",
-        "Price in healthy position below EMA 20": "السعر في موقع صحي تحت EMA 20",
-        "EMA 20 showing strong slope": "EMA 20 يظهر ميل قوي",
-        "RSI momentum rising": "زخم RSI يرتفع",
-        "RSI momentum falling": "زخم RSI يهبط",
-        "Price rejection at key level": "رفض السعر عند مستوى مهم",
-        "Price accepting current level": "السعر يقبل المستوى الحالي",
-        "Price compressing - breakout imminent": "السعر ينضغط - اختراق وشيك",
-        "Market in correction phase": "السوق في مرحلة تصحيح",
-        "No clear trend - range bound": "لا يوجد اتجاه واضح - سوق عرضي",
-        "Regime unclear - no trade": "الوضع غير واضح - لا تداول",
-        "EMA 20 slope weak - momentum lacking": "ميل EMA 20 ضعيف - الزخم ناقص",
-        "Price overextended from EMA 20": "السعر بعيد جداً عن EMA 20",
-    }
-
-    for eng, ar in translations.items():
-        if eng in text:
-            return text.replace(eng, ar)
-
-    # Translate RSI mentions
-    if "RSI (" in text and ") in bullish zone" in text:
-        return text.replace(") in bullish zone", ") في المنطقة الصاعدة")
-    if "RSI (" in text and ") in bearish zone" in text:
-        return text.replace(") in bearish zone", ") في المنطقة الهابطة")
-    if "RSI (" in text and ") overheated" in text:
-        return text.replace(") overheated", ") محموم - تشبع شرائي")
-    if "RSI (" in text and ") oversold" in text:
-        return text.replace(") oversold", ") تشبع بيعي")
-
-    # Translate watch levels
-    if "Wait for pullback to" in text:
-        return text.replace("Wait for pullback to", "انتظر تراجع إلى")
-    if "watch for reclaim at" in text:
-        return text.replace("Price below EMA 20 - watch for reclaim at", "السعر تحت EMA 20 - راقب استعادة")
-    if "watch for rejection at" in text:
-        return text.replace("Price above EMA 20 - watch for rejection at", "السعر فوق EMA 20 - راقب رفض عند")
-
-    return text
-
-
 def analyze_market(symbol: str) -> str:
-    """Run analysis"""
+    """Run 6-stage analysis"""
     resolved = MARKETS.get(symbol.lower(), symbol.upper())
 
     fetcher = DataFetcher()
     df = fetcher.fetch_data(resolved, period="1mo", interval="1h")
 
     if df is None or len(df) < 50:
-        return f"❌ لا توجد بيانات لـ {resolved}"
+        return f"❌ لا توجد بيانات كافية لـ {resolved}"
 
     engine = DecisionEngine(df, resolved)
     analysis = engine.analyze()
@@ -168,8 +125,7 @@ def run_bot(token: str):
     @bot.message_handler(commands=['start', 'help', 'ابدأ'])
     def start(message):
         msg = """🎯 *محرك قرارات السوق*
-
-الحفاظ على رأس المال أولاً.
+_6 مراحل إلزامية للتحليل_
 
 *الأوامر:*
 /gold - الذهب
@@ -177,35 +133,43 @@ def run_bot(token: str):
 /eurusd - يورو/دولار
 /scan - فحص الأسواق
 
-*القرارات:*
-🟢 تنفيذ - فرصة واضحة
-🟡 استعد - راقب للدخول
-🔴 انتظر - ابتعد
+*المراحل الست:*
+1️⃣ السياق (الاتجاه)
+2️⃣ الموقع (EMAs)
+3️⃣ الزخم (RSI)
+4️⃣ السلوك (الشموع)
+5️⃣ المستويات (S/R)
+6️⃣ المخاطرة (R:R)
 
-_عدم التداول قرار صحيح._"""
+*القرارات:*
+🟢 تنفيذ - جميع المراحل ناجحة
+🟡 استعد - بعض المراحل ناقصة
+🔴 انتظر - مرحلة أساسية فاشلة
+
+_الحفاظ على رأس المال أولاً._"""
         bot.reply_to(message, msg, parse_mode='Markdown')
 
     @bot.message_handler(commands=['gold', 'xauusd', 'ذهب'])
     def gold(message):
-        bot.reply_to(message, "⏳ جاري تحليل الذهب...")
+        bot.reply_to(message, "⏳ جاري التحليل بالمراحل الست...")
         result = analyze_market('gold')
         bot.send_message(message.chat.id, result, parse_mode='Markdown')
 
     @bot.message_handler(commands=['btc', 'bitcoin', 'بتكوين'])
     def btc(message):
-        bot.reply_to(message, "⏳ جاري تحليل البيتكوين...")
+        bot.reply_to(message, "⏳ جاري التحليل بالمراحل الست...")
         result = analyze_market('btc')
         bot.send_message(message.chat.id, result, parse_mode='Markdown')
 
     @bot.message_handler(commands=['eurusd'])
     def eurusd(message):
-        bot.reply_to(message, "⏳ جاري تحليل EUR/USD...")
+        bot.reply_to(message, "⏳ جاري التحليل بالمراحل الست...")
         result = analyze_market('eurusd')
         bot.send_message(message.chat.id, result, parse_mode='Markdown')
 
     @bot.message_handler(commands=['gbpusd'])
     def gbpusd(message):
-        bot.reply_to(message, "⏳ جاري تحليل GBP/USD...")
+        bot.reply_to(message, "⏳ جاري التحليل بالمراحل الست...")
         result = analyze_market('gbpusd')
         bot.send_message(message.chat.id, result, parse_mode='Markdown')
 
@@ -234,19 +198,27 @@ _عدم التداول قرار صحيح._"""
                 engine = DecisionEngine(df, resolved)
                 analysis = engine.analyze()
 
+                # Count passed stages
+                stages = [
+                    analysis.stage1_context,
+                    analysis.stage2_location,
+                    analysis.stage3_momentum,
+                    analysis.stage4_behavior,
+                    analysis.stage5_technical,
+                    analysis.stage6_risk
+                ]
+                passed = sum(1 for s in stages if s.passed)
+
                 icon = "🟢" if analysis.decision == Decision.EXECUTE else "🟡" if analysis.decision == Decision.PREPARE else "🔴"
                 decision_ar = DECISION_AR.get(analysis.decision, analysis.decision.value)
 
-                dir_text = ""
-                if analysis.direction:
-                    dir_text = "↑ شراء" if analysis.direction == Direction.BUY else "↓ بيع"
-
-                results.append(f"{icon} *{name}* {dir_text} | {decision_ar}")
+                results.append(f"{icon} *{name}* | {decision_ar} | {passed}/6 مراحل")
 
         msg = "📊 *فحص الأسواق*\n\n" + "\n".join(results)
+        msg += "\n\n_استخدم الأمر المحدد للتحليل الكامل_"
         bot.send_message(message.chat.id, msg, parse_mode='Markdown')
 
-    print("Bot is running...")
+    print("Bot is running with 6-stage analysis...")
     bot.infinity_polling()
 
 
