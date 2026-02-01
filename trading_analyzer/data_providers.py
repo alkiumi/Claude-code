@@ -1,9 +1,19 @@
 """
-Multi-Source Data Providers
-- Binance API (Crypto - Real-time)
-- Alpha Vantage (Forex)
-- Yahoo Finance (Fallback)
-- TradingView Webhooks
+Multi-Source Data Providers - Enhanced Version
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Primary Sources:
+- Binance API (Crypto - Real-time, No API key needed)
+- Twelve Data (Forex/Commodities - 800 calls/day free)
+- CoinGecko (Crypto - Unlimited free)
+
+Fallback Sources:
+- Yahoo Finance (All assets)
+- Alpha Vantage (Forex - 25 calls/day)
+
+Features:
+- Automatic failover between sources
+- Rate limiting protection
+- Data validation
 """
 import requests
 import pandas as pd
@@ -13,10 +23,14 @@ from abc import ABC, abstractmethod
 from enum import Enum
 import time
 import json
+import os
 
 
 class DataSource(Enum):
     BINANCE = "binance"
+    TWELVE_DATA = "twelvedata"
+    COINGECKO = "coingecko"
+    FINNHUB = "finnhub"
     ALPHA_VANTAGE = "alphavantage"
     YAHOO = "yahoo"
     TRADINGVIEW = "tradingview"
@@ -470,6 +484,394 @@ class YahooProvider(BaseDataProvider):
         return agg
 
 
+class TwelveDataProvider(BaseDataProvider):
+    """
+    Twelve Data API - Professional grade data
+    Free tier: 800 API calls/day, 8 calls/minute
+    Supports: Forex, Crypto, Stocks, Commodities
+    """
+
+    BASE_URL = "https://api.twelvedata.com"
+
+    INTERVAL_MAP = {
+        'M1': '1min',
+        'M5': '5min',
+        'M15': '15min',
+        'M30': '30min',
+        'H1': '1h',
+        'H4': '4h',
+        'D1': '1day',
+        'W1': '1week',
+    }
+
+    # Symbol mappings for commodities
+    SYMBOL_MAP = {
+        'GC=F': 'XAU/USD',      # Gold
+        'GOLD': 'XAU/USD',
+        'XAUUSD': 'XAU/USD',
+        'SI=F': 'XAG/USD',      # Silver
+        'CL=F': 'WTI/USD',      # Oil WTI
+        'OIL': 'WTI/USD',
+        'USOIL': 'WTI/USD',
+        'BTC-USD': 'BTC/USD',
+        'ETH-USD': 'ETH/USD',
+        'EURUSD=X': 'EUR/USD',
+        'GBPUSD=X': 'GBP/USD',
+    }
+
+    def __init__(self, api_key: str = None):
+        super().__init__()
+        # Free demo key or user's key
+        self.api_key = api_key or os.environ.get('TWELVE_DATA_KEY', 'demo')
+        self.rate_limit_delay = 8  # 8 calls per minute for free tier
+
+    def get_supported_intervals(self) -> List[str]:
+        return list(self.INTERVAL_MAP.keys())
+
+    def resolve_symbol(self, symbol: str) -> str:
+        """Convert symbol to Twelve Data format"""
+        symbol_upper = symbol.upper()
+        return self.SYMBOL_MAP.get(symbol_upper, symbol_upper)
+
+    def fetch_ohlcv(
+        self,
+        symbol: str,
+        interval: str,
+        limit: int = 200
+    ) -> Optional[pd.DataFrame]:
+        """Fetch OHLCV data from Twelve Data"""
+        try:
+            self._respect_rate_limit()
+
+            td_symbol = self.resolve_symbol(symbol)
+            td_interval = self.INTERVAL_MAP.get(interval, '15min')
+
+            url = f"{self.BASE_URL}/time_series"
+            params = {
+                'symbol': td_symbol,
+                'interval': td_interval,
+                'outputsize': min(limit, 5000),
+                'apikey': self.api_key,
+                'format': 'JSON'
+            }
+
+            response = self.session.get(url, params=params, timeout=15)
+
+            if response.status_code != 200:
+                print(f"Twelve Data API error: {response.status_code}")
+                return None
+
+            data = response.json()
+
+            if 'code' in data and data['code'] != 200:
+                print(f"Twelve Data error: {data.get('message', 'Unknown error')}")
+                return None
+
+            if 'values' not in data:
+                return None
+
+            records = []
+            for candle in data['values']:
+                records.append({
+                    'timestamp': candle['datetime'],
+                    'open': float(candle['open']),
+                    'high': float(candle['high']),
+                    'low': float(candle['low']),
+                    'close': float(candle['close']),
+                    'volume': float(candle.get('volume', 0))
+                })
+
+            df = pd.DataFrame(records)
+            df['timestamp'] = pd.to_datetime(df['timestamp'])
+            df.set_index('timestamp', inplace=True)
+            df.sort_index(inplace=True)
+
+            return df.tail(limit)
+
+        except Exception as e:
+            print(f"Twelve Data fetch error: {e}")
+            return None
+
+    def get_price(self, symbol: str) -> Optional[float]:
+        """Get current price"""
+        try:
+            self._respect_rate_limit()
+            td_symbol = self.resolve_symbol(symbol)
+
+            url = f"{self.BASE_URL}/price"
+            params = {
+                'symbol': td_symbol,
+                'apikey': self.api_key
+            }
+
+            response = self.session.get(url, params=params, timeout=5)
+
+            if response.status_code == 200:
+                data = response.json()
+                return float(data.get('price', 0))
+            return None
+
+        except Exception:
+            return None
+
+
+class CoinGeckoProvider(BaseDataProvider):
+    """
+    CoinGecko API - Free unlimited crypto data
+    No API key required for basic endpoints
+    Rate limit: 10-50 calls/minute
+    """
+
+    BASE_URL = "https://api.coingecko.com/api/v3"
+
+    # Map symbols to CoinGecko IDs
+    COIN_MAP = {
+        'BTC': 'bitcoin',
+        'BTC-USD': 'bitcoin',
+        'BTCUSD': 'bitcoin',
+        'ETH': 'ethereum',
+        'ETH-USD': 'ethereum',
+        'BNB': 'binancecoin',
+        'XRP': 'ripple',
+        'SOL': 'solana',
+        'ADA': 'cardano',
+        'DOGE': 'dogecoin',
+        'AVAX': 'avalanche-2',
+        'DOT': 'polkadot',
+        'MATIC': 'matic-network',
+        'LINK': 'chainlink',
+    }
+
+    def __init__(self):
+        super().__init__()
+        self.rate_limit_delay = 1.5  # Conservative rate limiting
+
+    def get_supported_intervals(self) -> List[str]:
+        return ['M5', 'M15', 'M30', 'H1', 'H4', 'D1']
+
+    def resolve_coin_id(self, symbol: str) -> Optional[str]:
+        """Convert symbol to CoinGecko ID"""
+        symbol_clean = symbol.upper().replace('-USD', '').replace('USDT', '')
+        return self.COIN_MAP.get(symbol_clean)
+
+    def fetch_ohlcv(
+        self,
+        symbol: str,
+        interval: str,
+        limit: int = 200
+    ) -> Optional[pd.DataFrame]:
+        """Fetch OHLCV data from CoinGecko"""
+        try:
+            self._respect_rate_limit()
+
+            coin_id = self.resolve_coin_id(symbol)
+            if not coin_id:
+                return None
+
+            # Determine days based on interval
+            if interval in ['M1', 'M5', 'M15']:
+                days = 1
+            elif interval in ['M30', 'H1']:
+                days = 7
+            elif interval == 'H4':
+                days = 30
+            else:
+                days = 90
+
+            url = f"{self.BASE_URL}/coins/{coin_id}/ohlc"
+            params = {
+                'vs_currency': 'usd',
+                'days': days
+            }
+
+            response = self.session.get(url, params=params, timeout=15)
+
+            if response.status_code != 200:
+                print(f"CoinGecko API error: {response.status_code}")
+                return None
+
+            data = response.json()
+
+            if not data:
+                return None
+
+            # CoinGecko OHLC format: [timestamp, open, high, low, close]
+            records = []
+            for candle in data:
+                records.append({
+                    'timestamp': candle[0],
+                    'open': float(candle[1]),
+                    'high': float(candle[2]),
+                    'low': float(candle[3]),
+                    'close': float(candle[4]),
+                    'volume': 0  # CoinGecko OHLC doesn't include volume
+                })
+
+            df = pd.DataFrame(records)
+            df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
+            df.set_index('timestamp', inplace=True)
+            df.sort_index(inplace=True)
+
+            return df.tail(limit)
+
+        except Exception as e:
+            print(f"CoinGecko fetch error: {e}")
+            return None
+
+    def get_price(self, symbol: str) -> Optional[Dict]:
+        """Get current price with 24h change"""
+        try:
+            self._respect_rate_limit()
+
+            coin_id = self.resolve_coin_id(symbol)
+            if not coin_id:
+                return None
+
+            url = f"{self.BASE_URL}/simple/price"
+            params = {
+                'ids': coin_id,
+                'vs_currencies': 'usd',
+                'include_24hr_change': 'true',
+                'include_24hr_vol': 'true'
+            }
+
+            response = self.session.get(url, params=params, timeout=5)
+
+            if response.status_code == 200:
+                data = response.json()
+                if coin_id in data:
+                    return {
+                        'price': data[coin_id]['usd'],
+                        'change_24h': data[coin_id].get('usd_24h_change', 0),
+                        'volume_24h': data[coin_id].get('usd_24h_vol', 0)
+                    }
+            return None
+
+        except Exception:
+            return None
+
+
+class FinnhubProvider(BaseDataProvider):
+    """
+    Finnhub API - Real-time market data
+    Free tier: 60 API calls/minute
+    Supports: Stocks, Forex, Crypto
+    """
+
+    BASE_URL = "https://finnhub.io/api/v1"
+
+    INTERVAL_MAP = {
+        'M1': '1',
+        'M5': '5',
+        'M15': '15',
+        'M30': '30',
+        'H1': '60',
+        'D1': 'D',
+        'W1': 'W',
+    }
+
+    def __init__(self, api_key: str = None):
+        super().__init__()
+        self.api_key = api_key or os.environ.get('FINNHUB_KEY', '')
+        self.rate_limit_delay = 1  # 60 calls/minute
+
+    def get_supported_intervals(self) -> List[str]:
+        return list(self.INTERVAL_MAP.keys())
+
+    def fetch_ohlcv(
+        self,
+        symbol: str,
+        interval: str,
+        limit: int = 200
+    ) -> Optional[pd.DataFrame]:
+        """Fetch OHLCV data from Finnhub"""
+        if not self.api_key:
+            return None
+
+        try:
+            self._respect_rate_limit()
+
+            fh_resolution = self.INTERVAL_MAP.get(interval, '15')
+
+            # Calculate time range
+            now = int(time.time())
+            if interval in ['M1', 'M5', 'M15']:
+                from_time = now - (86400 * 2)  # 2 days
+            elif interval in ['M30', 'H1']:
+                from_time = now - (86400 * 7)  # 7 days
+            else:
+                from_time = now - (86400 * 365)  # 1 year
+
+            url = f"{self.BASE_URL}/stock/candle"
+            params = {
+                'symbol': symbol.upper(),
+                'resolution': fh_resolution,
+                'from': from_time,
+                'to': now,
+                'token': self.api_key
+            }
+
+            response = self.session.get(url, params=params, timeout=15)
+
+            if response.status_code != 200:
+                return None
+
+            data = response.json()
+
+            if data.get('s') != 'ok':
+                return None
+
+            df = pd.DataFrame({
+                'timestamp': data['t'],
+                'open': data['o'],
+                'high': data['h'],
+                'low': data['l'],
+                'close': data['c'],
+                'volume': data['v']
+            })
+
+            df['timestamp'] = pd.to_datetime(df['timestamp'], unit='s')
+            df.set_index('timestamp', inplace=True)
+
+            return df.tail(limit)
+
+        except Exception as e:
+            print(f"Finnhub fetch error: {e}")
+            return None
+
+    def get_quote(self, symbol: str) -> Optional[Dict]:
+        """Get real-time quote"""
+        if not self.api_key:
+            return None
+
+        try:
+            self._respect_rate_limit()
+
+            url = f"{self.BASE_URL}/quote"
+            params = {
+                'symbol': symbol.upper(),
+                'token': self.api_key
+            }
+
+            response = self.session.get(url, params=params, timeout=5)
+
+            if response.status_code == 200:
+                data = response.json()
+                return {
+                    'price': data.get('c', 0),
+                    'open': data.get('o', 0),
+                    'high': data.get('h', 0),
+                    'low': data.get('l', 0),
+                    'prev_close': data.get('pc', 0),
+                    'change': data.get('d', 0),
+                    'change_pct': data.get('dp', 0)
+                }
+            return None
+
+        except Exception:
+            return None
+
+
 class TradingViewWebhook:
     """
     TradingView Webhook Handler
@@ -518,15 +920,33 @@ class MultiSourceDataManager:
     """
     Manages multiple data sources with automatic fallback
     Selects the best source based on asset type
+
+    Priority Order:
+    ━━━━━━━━━━━━━━━
+    Crypto:      Binance → CoinGecko → Yahoo
+    Forex:       Twelve Data → Alpha Vantage → Yahoo
+    Commodities: Twelve Data → Yahoo
+    Stocks:      Finnhub → Yahoo
     """
 
-    def __init__(self, alpha_vantage_key: str = None):
+    def __init__(self, alpha_vantage_key: str = None, twelve_data_key: str = None, finnhub_key: str = None):
+        # Primary providers
         self.binance = BinanceProvider()
+        self.twelve_data = TwelveDataProvider(twelve_data_key)
+        self.coingecko = CoinGeckoProvider()
+
+        # Secondary providers
+        self.finnhub = FinnhubProvider(finnhub_key)
         self.alpha_vantage = AlphaVantageProvider(alpha_vantage_key)
+
+        # Fallback
         self.yahoo = YahooProvider()
+
+        # Webhook handler
         self.tradingview = TradingViewWebhook()
 
         self.fetch_log = []
+        self.source_stats = {source.value: {'success': 0, 'fail': 0} for source in DataSource}
 
     def detect_asset_type(self, symbol: str) -> AssetType:
         """Detect the type of asset from symbol"""
@@ -541,10 +961,7 @@ class MultiSourceDataManager:
             return AssetType.FOREX
 
         # Gold/Commodities
-        if 'GC=F' in symbol or 'GOLD' in symbol_upper or 'XAU' in symbol_upper:
-            return AssetType.COMMODITY
-
-        if 'SI=F' in symbol or 'CL=F' in symbol:
+        if any(x in symbol_upper for x in ['GC=F', 'GOLD', 'XAU', 'SI=F', 'CL=F', 'OIL', 'WTI']):
             return AssetType.COMMODITY
 
         # Default to stock
@@ -555,15 +972,23 @@ class MultiSourceDataManager:
         if asset_type == AssetType.CRYPTO:
             return [
                 (DataSource.BINANCE, self.binance),
+                (DataSource.COINGECKO, self.coingecko),
                 (DataSource.YAHOO, self.yahoo),
             ]
         elif asset_type == AssetType.FOREX:
             return [
+                (DataSource.TWELVE_DATA, self.twelve_data),
                 (DataSource.ALPHA_VANTAGE, self.alpha_vantage),
                 (DataSource.YAHOO, self.yahoo),
             ]
-        else:  # Commodity, Stock
+        elif asset_type == AssetType.COMMODITY:
             return [
+                (DataSource.TWELVE_DATA, self.twelve_data),
+                (DataSource.YAHOO, self.yahoo),
+            ]
+        else:  # Stock
+            return [
+                (DataSource.FINNHUB, self.finnhub),
                 (DataSource.YAHOO, self.yahoo),
             ]
 
@@ -582,6 +1007,7 @@ class MultiSourceDataManager:
             'asset_type': asset_type.value,
             'fetch_time': datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S UTC'),
             'sources_used': [],
+            'sources_tried': [],
             'H4': None,
             'H1': None,
             'M15': None,
@@ -600,16 +1026,21 @@ class MultiSourceDataManager:
                     df = provider.fetch_ohlcv(symbol, tf, limit=200)
                     if df is not None and len(df) > 0:
                         source_used = source_name.value
+                        self.source_stats[source_used]['success'] += 1
                         break
+                    else:
+                        self.source_stats[source_name.value]['fail'] += 1
+                        result['sources_tried'].append(f"{tf}:{source_name.value}:fail")
                 except Exception as e:
-                    print(f"Error with {source_name.value} for {tf}: {e}")
+                    self.source_stats[source_name.value]['fail'] += 1
+                    result['sources_tried'].append(f"{tf}:{source_name.value}:error")
                     continue
 
             result[tf] = df
             if source_used:
                 result['sources_used'].append(f"{tf}:{source_used}")
 
-            time.sleep(0.2)  # Small delay between timeframes
+            time.sleep(0.15)  # Small delay between timeframes
 
         # Log the fetch
         self.fetch_log.append({
@@ -619,6 +1050,19 @@ class MultiSourceDataManager:
         })
 
         return result
+
+    def get_source_stats(self) -> Dict:
+        """Get statistics about data source usage"""
+        stats = {}
+        for source, data in self.source_stats.items():
+            total = data['success'] + data['fail']
+            if total > 0:
+                stats[source] = {
+                    'success': data['success'],
+                    'fail': data['fail'],
+                    'success_rate': f"{(data['success']/total)*100:.1f}%"
+                }
+        return stats
 
     def get_current_price(self, symbol: str) -> Optional[Dict]:
         """Get current price from best available source"""
@@ -691,43 +1135,81 @@ class MultiSourceDataManager:
 
 
 # Convenience function
-def create_data_manager(alpha_vantage_key: str = None) -> MultiSourceDataManager:
-    """Create a configured data manager"""
-    return MultiSourceDataManager(alpha_vantage_key)
+def create_data_manager(
+    alpha_vantage_key: str = None,
+    twelve_data_key: str = None,
+    finnhub_key: str = None
+) -> MultiSourceDataManager:
+    """
+    Create a configured data manager
+
+    API Keys (optional - will use env variables or demo keys):
+    - TWELVE_DATA_KEY: For forex/commodities (800 calls/day free)
+    - FINNHUB_KEY: For stocks (60 calls/min free)
+    - ALPHA_VANTAGE_KEY: For forex backup (25 calls/day free)
+    """
+    return MultiSourceDataManager(
+        alpha_vantage_key=alpha_vantage_key,
+        twelve_data_key=twelve_data_key,
+        finnhub_key=finnhub_key
+    )
 
 
 if __name__ == "__main__":
     # Test the providers
-    print("Testing Multi-Source Data Providers\n")
+    print("=" * 60)
+    print("  Testing Multi-Source Data Providers (Enhanced)")
+    print("=" * 60)
 
     manager = create_data_manager()
 
+    print("\n📊 Available Data Sources:")
+    print("  • Binance      - Crypto (real-time, free)")
+    print("  • Twelve Data  - Forex/Commodities (800/day free)")
+    print("  • CoinGecko    - Crypto (unlimited free)")
+    print("  • Finnhub      - Stocks (60/min free)")
+    print("  • Yahoo        - Fallback (free)")
+
     # Test Bitcoin (should use Binance)
-    print("=" * 50)
-    print("Testing BTC-USD (Crypto)")
+    print("\n" + "=" * 50)
+    print("🪙 Testing BTC-USD (Crypto)")
     print("=" * 50)
     data = manager.fetch_mtf_data('BTC-USD')
     print(f"Symbol: {data['symbol']}")
     print(f"Asset Type: {data['asset_type']}")
-    print(f"Sources: {data['sources_used']}")
+    print(f"Sources Used: {data['sources_used']}")
     for tf in ['H4', 'H1', 'M15', 'M5']:
         if data[tf] is not None:
-            print(f"  {tf}: {len(data[tf])} candles, last close: {data[tf]['close'].iloc[-1]:.2f}")
+            print(f"  {tf}: {len(data[tf])} candles, last: ${data[tf]['close'].iloc[-1]:,.2f}")
 
-    # Test price verification
-    print("\nPrice Verification:")
-    verify = manager.verify_data_consistency('BTC-USD')
-    print(f"  Verified: {verify['verified']}")
-    print(f"  Prices: {verify['prices']}")
-
-    # Test Gold (should use Yahoo)
+    # Test Gold (should use Twelve Data or Yahoo)
     print("\n" + "=" * 50)
-    print("Testing GC=F (Gold)")
+    print("🥇 Testing GOLD (Commodity)")
     print("=" * 50)
     data = manager.fetch_mtf_data('GC=F')
     print(f"Symbol: {data['symbol']}")
     print(f"Asset Type: {data['asset_type']}")
-    print(f"Sources: {data['sources_used']}")
+    print(f"Sources Used: {data['sources_used']}")
     for tf in ['H4', 'H1', 'M15', 'M5']:
         if data[tf] is not None:
-            print(f"  {tf}: {len(data[tf])} candles, last close: {data[tf]['close'].iloc[-1]:.2f}")
+            print(f"  {tf}: {len(data[tf])} candles, last: ${data[tf]['close'].iloc[-1]:,.2f}")
+
+    # Test EUR/USD (should use Twelve Data or Alpha Vantage)
+    print("\n" + "=" * 50)
+    print("💱 Testing EUR/USD (Forex)")
+    print("=" * 50)
+    data = manager.fetch_mtf_data('EURUSD=X')
+    print(f"Symbol: {data['symbol']}")
+    print(f"Asset Type: {data['asset_type']}")
+    print(f"Sources Used: {data['sources_used']}")
+    for tf in ['H4', 'H1', 'M15', 'M5']:
+        if data[tf] is not None:
+            print(f"  {tf}: {len(data[tf])} candles, last: {data[tf]['close'].iloc[-1]:.5f}")
+
+    # Show source statistics
+    print("\n" + "=" * 50)
+    print("📈 Source Statistics")
+    print("=" * 50)
+    stats = manager.get_source_stats()
+    for source, data in stats.items():
+        print(f"  {source}: {data['success']} success, {data['fail']} fail ({data['success_rate']})")
