@@ -63,7 +63,7 @@ def format_analysis(result, account_balance: float = 100) -> str:
         msg += f"\n*الصفقة:* {d}\n"
 
         # Get current price from M5 data
-        current_price = result.m5.close if result.m5 else 0
+        current_price = result.m5.price if result.m5 else 0
 
         if result.stop_loss and current_price > 0:
             msg += f"الدخول: `{current_price:.2f}`\n"

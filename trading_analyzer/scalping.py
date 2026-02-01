@@ -384,6 +384,22 @@ class ScalpingEngine:
             setup = ScalpSetup.VOLUME_SPIKE
             reasons.append(f"ارتفاع حجم {volume_ratio:.1f}x مع شمعة هابطة قوية")
 
+        # ============ TRENDING MARKET DETECTION ============
+
+        # Strong Downtrend - even without specific setup
+        if ema_slope < -0.1 and rsi < 55:
+            if score >= -10:  # No strong sell signal yet
+                score -= 25
+                setup = ScalpSetup.PULLBACK
+                reasons.append(f"اتجاه هابط (EMA slope={ema_slope:.2f}, RSI={rsi:.0f})")
+
+        # Strong Uptrend - even without specific setup
+        if ema_slope > 0.1 and rsi > 45:
+            if score <= 10:  # No strong buy signal yet
+                score += 25
+                setup = ScalpSetup.PULLBACK
+                reasons.append(f"اتجاه صاعد (EMA slope={ema_slope:.2f}, RSI={rsi:.0f})")
+
         # ============ ADDITIONAL FACTORS ============
 
         # Trend alignment bonus
@@ -391,8 +407,16 @@ class ScalpingEngine:
             score += 10
             reasons.append("الاتجاه العام صاعد ✓")
         elif score < 0 and ema_slope < 0:
-            score -= 10
+            score += -10  # Make score more negative
             reasons.append("الاتجاه العام هابط ✓")
+
+        # RSI extreme zones bonus
+        if rsi < 30:
+            score += 15
+            reasons.append("RSI في منطقة تشبع بيعي")
+        elif rsi > 70:
+            score -= 15
+            reasons.append("RSI في منطقة تشبع شرائي")
 
         # Warnings
         if 40 < rsi < 60:
@@ -454,10 +478,13 @@ class ScalpingEngine:
         """Determine how urgent the entry is"""
         momentum = abs(data['momentum_3'])
         volume_ratio = data['volume_ratio']
+        ema_slope = abs(data['ema_9_slope'])
 
         if setup in [ScalpSetup.MOMENTUM_BURST, ScalpSetup.VOLUME_SPIKE]:
             return "فوري ⚡"
-        elif momentum > 0.3 and volume_ratio > 1.2:
+        elif momentum > 0.2 or ema_slope > 0.15:
+            return "قريب 🔔"
+        elif volume_ratio > 1.0:
             return "قريب 🔔"
         else:
             return "انتظار ⏳"
