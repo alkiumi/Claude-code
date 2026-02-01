@@ -19,8 +19,8 @@ from mtf_analyzer import MTFDecisionEngine, Decision, Direction
 from scalping import create_scalping_engine
 
 
-def format_analysis(result) -> str:
-    """Format MTF analysis"""
+def format_analysis(result, account_balance: float = 100) -> str:
+    """Format MTF analysis with $100 budget calculations"""
     if result.decision == Decision.EXECUTE:
         icon, ar = "🟢", "تنفيذ"
     elif result.decision == Decision.PREPARE:
@@ -57,14 +57,52 @@ def format_analysis(result) -> str:
         emoji = "😱" if fng < 25 else "😐" if fng < 55 else "🤑"
         msg += f"\n*AI:* {emoji} خوف/طمع {fng} | {ai.ai_recommendation}\n"
 
-    # Trade plan
+    # Trade plan with $100 budget
     if result.decision == Decision.EXECUTE and result.direction:
         d = "🟢 شراء" if result.direction == Direction.BUY else "🔴 بيع"
         msg += f"\n*الصفقة:* {d}\n"
-        if result.stop_loss:
+
+        # Get current price from M5 data
+        current_price = result.m5.close if result.m5 else 0
+
+        if result.stop_loss and current_price > 0:
+            msg += f"الدخول: `{current_price:.2f}`\n"
             msg += f"الوقف: `{result.stop_loss:.2f}`\n"
+
+            # Calculate risk in pips/points
+            risk_points = abs(current_price - result.stop_loss)
+            risk_percent_price = (risk_points / current_price) * 100
+
+            # Calculate lot size for $100 with 2% risk ($2)
+            risk_usd = account_balance * 0.02  # 2% risk = $2
+
+            # Determine pip value based on asset
+            if 'BTC' in result.symbol:
+                pip_value = 1.0  # $1 per point per 0.001 BTC
+                lot_size = risk_usd / risk_points if risk_points > 0 else 0.001
+                lot_size = round(max(0.001, lot_size), 4)
+            else:  # Gold, etc
+                pip_value = 0.1  # $0.1 per 0.01 lot per point
+                lot_size = risk_usd / (risk_points * 10) if risk_points > 0 else 0.01
+                lot_size = round(max(0.01, lot_size), 2)
+
+            msg += f"\n*💰 لرأس مال ${account_balance:.0f}:*\n"
+            msg += f"```\n"
+            msg += f"اللوت:    {lot_size}\n"
+            msg += f"المخاطرة: ${risk_usd:.2f} (2%)\n"
+
         if result.target:
             msg += f"الهدف: `{result.target:.2f}`\n"
+
+            # Calculate potential profit
+            if result.stop_loss and current_price > 0:
+                reward_points = abs(result.target - current_price)
+                if 'BTC' in result.symbol:
+                    profit = reward_points * lot_size
+                else:
+                    profit = reward_points * lot_size * 10
+                msg += f"الربح:    ${profit:.2f}\n"
+                msg += f"```\n"
 
     return msg
 
