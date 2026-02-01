@@ -199,7 +199,14 @@ def run_bot(token: str):
         bot.send_message(message.chat.id, msg, parse_mode='Markdown')
 
     print("Bot running...")
-    bot.infinity_polling()
+    while True:
+        try:
+            bot.infinity_polling(timeout=60, long_polling_timeout=30)
+        except Exception as e:
+            print(f"Bot error: {e}")
+            import time
+            time.sleep(5)
+            print("Restarting bot...")
 
 
 if __name__ == "__main__":
