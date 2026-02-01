@@ -3,11 +3,13 @@
 Telegram Bot - Multi-Timeframe Decision Engine
 H4 → H1 → M15 → M5
 + Smart Alerts System
++ Scalping Engine (M5/M15)
 """
 import os
 import telebot
 from mtf_analyzer import MTFDecisionEngine, Decision, Direction
 from smart_alerts import create_alert_manager, AlertTrigger
+from scalping import create_scalping_engine
 
 
 DECISION_AR = {
@@ -180,38 +182,39 @@ def run_bot(token: str):
 
     @bot.message_handler(commands=['start', 'help'])
     def start(message):
-        msg = """🎯 *محرك القرارات متعدد الفريمات*
-_Multi-Timeframe Decision Engine_
+        msg = """🎯 *محرك القرارات الذكي*
+_Smart Trading Decision Engine_
 
-*📊 التحليل:*
+*📊 التحليل الكامل (MTF):*
 /btc - تحليل البيتكوين
 /gold - تحليل الذهب
-/eurusd - تحليل EUR/USD
 /scan - فحص جميع الأسواق
-/a SYMBOL - تحليل أي رمز
 
-*🔔 التنبيهات الذكية:*
-/alerts - عرض التنبيهات النشطة
-/alert\_price BTC 100000 above - تنبيه سعر
-/alert\_rsi BTC oversold - تنبيه RSI
-/alert\_execute BTC - تنبيه قرار التنفيذ
-/alert\_ai BTC buy - تنبيه إشارة AI
-/alert\_delete ID - حذف تنبيه
-/alert\_start - تشغيل المسح التلقائي
-/alert\_check - فحص فوري
+*⚡ السكالبينج (M5/M15):*
+/scalp - فحص سريع لجميع الأصول
+/s BTC - سكالبينج سريع
+/s GOLD M5 - سكالبينج M5
+/scalp\_btc - بيتكوين
+/scalp\_gold - الذهب
+/scalp\_eurusd - يورو/دولار
+/scalp\_oil - النفط
+/scalp\_m5 - فحص M5
+
+*🔔 التنبيهات:*
+/alerts - التنبيهات النشطة
+/alert\_price BTC 100000 above
+/alert\_execute BTC
+/alert\_start - تشغيل المسح
+
+*الأصول المدعومة:*
+₿ BTC | 🥇 GOLD | 💶 EUR/USD | 🛢️ OIL
 
 *القرارات:*
-🟢 تنفيذ - 4/4 فريمات + 5/6 مراحل
-🟡 استعد - توافق جزئي
-🔴 انتظر - لا توافق
+🟢🟢 شراء قوي | 🔴🔴 بيع قوي
+🟢 شراء | 🔴 بيع
+⚪ محايد - انتظر
 
-*🤖 الذكاء الاصطناعي:*
-• مؤشر الخوف/الطمع
-• التعرف على الأنماط
-• توقع الاتجاه
-• الدعم/المقاومة
-
-_الحفاظ على رأس المال أولاً._"""
+_⚡ السكالبينج = سرعة + انضباط_"""
         bot.reply_to(message, msg, parse_mode='Markdown')
 
     @bot.message_handler(commands=['btc', 'bitcoin'])
@@ -548,6 +551,137 @@ _الحفاظ على رأس المال أولاً._"""
         """Stop background alert scanner"""
         alert_manager.stop_scanner()
         bot.reply_to(message, "⏹️ تم إيقاف المسح التلقائي")
+
+    # ============ SCALPING SYSTEM ============
+
+    scalping_engine = create_scalping_engine()
+
+    @bot.message_handler(commands=['scalp', 'سكالب'])
+    def scalp_scan(message):
+        """Quick scalp scan all assets"""
+        bot.reply_to(message, "⚡ جاري فحص فرص السكالبينج...")
+
+        try:
+            msg = scalping_engine.quick_scan()
+            bot.send_message(message.chat.id, msg, parse_mode='Markdown')
+        except Exception as e:
+            bot.send_message(message.chat.id, f"❌ خطأ: {str(e)}")
+
+    @bot.message_handler(commands=['scalp_btc', 'سكالب_بتكوين'])
+    def scalp_btc(message):
+        """Scalp analysis for BTC"""
+        bot.reply_to(message, "⚡ جاري تحليل سكالبينج البيتكوين...")
+
+        try:
+            opp = scalping_engine.analyze_scalp('BTC', 'M15')
+            if opp:
+                msg = scalping_engine.format_opportunity(opp)
+            else:
+                msg = "📭 لا توجد فرصة سكالبينج للبيتكوين حالياً\n_جرب لاحقاً أو راقب الفريمات الأصغر_"
+            bot.send_message(message.chat.id, msg, parse_mode='Markdown')
+        except Exception as e:
+            bot.send_message(message.chat.id, f"❌ خطأ: {str(e)}")
+
+    @bot.message_handler(commands=['scalp_gold', 'سكالب_ذهب'])
+    def scalp_gold(message):
+        """Scalp analysis for Gold"""
+        bot.reply_to(message, "⚡ جاري تحليل سكالبينج الذهب...")
+
+        try:
+            opp = scalping_engine.analyze_scalp('GOLD', 'M15')
+            if opp:
+                msg = scalping_engine.format_opportunity(opp)
+            else:
+                msg = "📭 لا توجد فرصة سكالبينج للذهب حالياً\n_جرب لاحقاً أو راقب الفريمات الأصغر_"
+            bot.send_message(message.chat.id, msg, parse_mode='Markdown')
+        except Exception as e:
+            bot.send_message(message.chat.id, f"❌ خطأ: {str(e)}")
+
+    @bot.message_handler(commands=['scalp_eurusd', 'سكالب_يورو'])
+    def scalp_eurusd(message):
+        """Scalp analysis for EUR/USD"""
+        bot.reply_to(message, "⚡ جاري تحليل سكالبينج EUR/USD...")
+
+        try:
+            opp = scalping_engine.analyze_scalp('EURUSD', 'M15')
+            if opp:
+                msg = scalping_engine.format_opportunity(opp)
+            else:
+                msg = "📭 لا توجد فرصة سكالبينج لـ EUR/USD حالياً\n_جرب لاحقاً أو راقب الفريمات الأصغر_"
+            bot.send_message(message.chat.id, msg, parse_mode='Markdown')
+        except Exception as e:
+            bot.send_message(message.chat.id, f"❌ خطأ: {str(e)}")
+
+    @bot.message_handler(commands=['scalp_oil', 'سكالب_نفط'])
+    def scalp_oil(message):
+        """Scalp analysis for Oil"""
+        bot.reply_to(message, "⚡ جاري تحليل سكالبينج النفط...")
+
+        try:
+            opp = scalping_engine.analyze_scalp('OIL', 'M15')
+            if opp:
+                msg = scalping_engine.format_opportunity(opp)
+            else:
+                msg = "📭 لا توجد فرصة سكالبينج للنفط حالياً\n_جرب لاحقاً أو راقب الفريمات الأصغر_"
+            bot.send_message(message.chat.id, msg, parse_mode='Markdown')
+        except Exception as e:
+            bot.send_message(message.chat.id, f"❌ خطأ: {str(e)}")
+
+    @bot.message_handler(commands=['scalp_m5'])
+    def scalp_m5(message):
+        """Quick scalp scan on M5 timeframe"""
+        bot.reply_to(message, "⚡ جاري فحص فرص السكالبينج (M5)...")
+
+        try:
+            scan = scalping_engine.scan_all_assets('M5')
+
+            msg = f"⚡ *فحص السكالبينج - M5*\n"
+            msg += f"━━━━━━━━━━━━━━━━━━━━\n"
+            msg += f"حالة السوق: {scan.market_condition}\n\n"
+
+            if scan.opportunities:
+                for opp in scan.opportunities:
+                    icon = '🟢' if 'BUY' in opp.signal.value else '🔴'
+                    msg += f"{icon} *{opp.symbol}*: {opp.signal.value}\n"
+                    msg += f"   الثقة: {opp.confidence:.0f}% | {opp.urgency}\n\n"
+            else:
+                msg += "📭 لا توجد فرص حالياً"
+
+            bot.send_message(message.chat.id, msg, parse_mode='Markdown')
+        except Exception as e:
+            bot.send_message(message.chat.id, f"❌ خطأ: {str(e)}")
+
+    @bot.message_handler(commands=['s'])
+    def quick_scalp(message):
+        """Quick scalp command: /s BTC or /s GOLD"""
+        parts = message.text.split()
+        if len(parts) < 2:
+            # Default to quick scan
+            bot.reply_to(message, "⚡ جاري الفحص السريع...")
+            try:
+                msg = scalping_engine.quick_scan()
+                bot.send_message(message.chat.id, msg, parse_mode='Markdown')
+            except Exception as e:
+                bot.send_message(message.chat.id, f"❌ خطأ: {str(e)}")
+            return
+
+        asset = parts[1].upper()
+        timeframe = parts[2].upper() if len(parts) > 2 else 'M15'
+
+        if timeframe not in ['M5', 'M15']:
+            timeframe = 'M15'
+
+        bot.reply_to(message, f"⚡ جاري تحليل {asset} ({timeframe})...")
+
+        try:
+            opp = scalping_engine.analyze_scalp(asset, timeframe)
+            if opp:
+                msg = scalping_engine.format_opportunity(opp)
+            else:
+                msg = f"📭 لا توجد فرصة سكالبينج لـ {asset} حالياً"
+            bot.send_message(message.chat.id, msg, parse_mode='Markdown')
+        except Exception as e:
+            bot.send_message(message.chat.id, f"❌ خطأ: {str(e)}")
 
     print("MTF Bot is running...")
     bot.infinity_polling()
