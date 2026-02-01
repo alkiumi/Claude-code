@@ -492,7 +492,7 @@ class ScalpingEngine:
             symbols_scanned=symbols_scanned
         )
 
-    def quick_scan(self, account_balance: float = 1000) -> str:
+    def quick_scan(self, account_balance: float = 100) -> str:
         """Quick scan returning formatted Arabic message with decision"""
         scan = self.scan_all_assets('M15')
 
@@ -554,8 +554,8 @@ class ScalpingEngine:
 
         return msg
 
-    def calculate_lot_size(self, opp: ScalpOpportunity, account_balance: float = 1000,
-                           risk_percent: float = 1.0) -> Dict:
+    def calculate_lot_size(self, opp: ScalpOpportunity, account_balance: float = 100,
+                           risk_percent: float = 2.0) -> Dict:
         """
         Calculate recommended lot size based on account balance and risk
 
@@ -689,7 +689,7 @@ class ScalpingEngine:
 
         return decision
 
-    def format_opportunity(self, opp: ScalpOpportunity, account_balance: float = 1000) -> str:
+    def format_opportunity(self, opp: ScalpOpportunity, account_balance: float = 100) -> str:
         """Format single opportunity as detailed message with actionable advice"""
         is_buy = 'BUY' in opp.signal.value
         direction_icon = "🟢📈" if is_buy else "🔴📉"
@@ -728,7 +728,7 @@ class ScalpingEngine:
         msg += f"```\n"
         msg += f"رأس المال:    ${account_balance:,.0f}\n"
         msg += f"اللوت المقترح: {lot_info['lot_size']:.4f}\n"
-        msg += f"المخاطرة:      ${lot_info['risk_usd']:.2f} (1%)\n"
+        msg += f"المخاطرة:      ${lot_info['risk_usd']:.2f} (2%)\n"
         msg += f"─────────────────────\n"
         msg += f"الربح هدف 1:   ${lot_info['profit_tp1']:.2f} ✓\n"
         msg += f"الربح هدف 2:   ${lot_info['profit_tp2']:.2f} ✓✓\n"
