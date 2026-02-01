@@ -492,8 +492,8 @@ class ScalpingEngine:
             symbols_scanned=symbols_scanned
         )
 
-    def quick_scan(self) -> str:
-        """Quick scan returning formatted Arabic message"""
+    def quick_scan(self, account_balance: float = 1000) -> str:
+        """Quick scan returning formatted Arabic message with decision"""
         scan = self.scan_all_assets('M15')
 
         msg = f"⚡ *فحص السكالبينج السريع*\n"
@@ -509,46 +509,230 @@ class ScalpingEngine:
         msg += f"*الفرص المتاحة ({len(scan.opportunities)}):*\n\n"
 
         for opp in scan.opportunities[:3]:  # Top 3
+            decision = self.get_entry_decision(opp)
+            lot_info = self.calculate_lot_size(opp, account_balance)
+
             msg += f"{'🟢' if 'BUY' in opp.signal.value else '🔴'} *{opp.symbol}* - {opp.signal.value}\n"
-            msg += f"   النوع: {opp.setup_type.value}\n"
-            msg += f"   الثقة: {opp.confidence:.0f}%\n"
-            msg += f"   {opp.urgency}\n\n"
+
+            # Clear decision
+            if decision['enter_now']:
+                msg += f"   📍 *ادخل الآن!* {decision['emoji']}\n"
+            else:
+                msg += f"   📍 انتظر ~{decision['wait_minutes']} دقيقة ⏳\n"
+
+            msg += f"   💰 ربح متوقع: ${lot_info['profit_tp1']:.2f}\n"
+            msg += f"   📊 لوت: {lot_info['lot_size']:.4f}\n"
+            msg += f"   الثقة: {opp.confidence:.0f}%\n\n"
 
         if scan.best_opportunity:
             best = scan.best_opportunity
+            best_decision = self.get_entry_decision(best)
+            best_lot = self.calculate_lot_size(best, account_balance)
+
             msg += f"━━━━━━━━━━━━━━━━━━━━\n"
-            msg += f"🎯 *أفضل فرصة: {best.symbol}*\n"
+            msg += f"🎯 *أفضل فرصة: {best.symbol}*\n\n"
+
+            # Main Decision
+            if best_decision['enter_now']:
+                msg += f"```\n"
+                msg += f"🚀 ادخل الآن!\n"
+                msg += f"```\n"
+            else:
+                msg += f"```\n"
+                msg += f"⏳ انتظر {best_decision['wait_minutes']} دقيقة\n"
+                msg += f"السبب: {best_decision['reason']}\n"
+                msg += f"```\n"
+
+            msg += f"\n*التفاصيل:*\n"
             msg += f"   الإشارة: {best.signal.value}\n"
             msg += f"   الدخول: `{best.entry_price:.2f}`\n"
             msg += f"   الوقف: `{best.stop_loss:.2f}`\n"
-            msg += f"   الهدف1: `{best.take_profit_1:.2f}` (1:1)\n"
-            msg += f"   الهدف2: `{best.take_profit_2:.2f}` (1:1.5)\n"
-            msg += f"   المخاطرة: {best.risk_percent:.2f}%\n"
+            msg += f"   الهدف1: `{best.take_profit_1:.2f}`\n"
+            msg += f"\n*💰 لرأس مال ${account_balance:,.0f}:*\n"
+            msg += f"   اللوت: `{best_lot['lot_size']:.4f}`\n"
+            msg += f"   الربح: `${best_lot['profit_tp1']:.2f}` - `${best_lot['profit_tp3']:.2f}`\n"
 
         return msg
 
-    def format_opportunity(self, opp: ScalpOpportunity) -> str:
-        """Format single opportunity as detailed message"""
+    def calculate_lot_size(self, opp: ScalpOpportunity, account_balance: float = 1000,
+                           risk_percent: float = 1.0) -> Dict:
+        """
+        Calculate recommended lot size based on account balance and risk
+
+        Args:
+            opp: ScalpOpportunity object
+            account_balance: Account balance in USD (default $1000)
+            risk_percent: Maximum risk per trade as % (default 1%)
+
+        Returns:
+            Dict with lot_size, risk_usd, potential_profit
+        """
+        # Risk amount in USD
+        risk_usd = account_balance * (risk_percent / 100)
+
+        # Get asset info
+        asset_info = self.SCALP_ASSETS.get(opp.symbol, {'pip': 1, 'spread': 0})
+        pip_value = asset_info['pip']
+
+        # Calculate pip value based on asset
+        if opp.symbol in ['BTC']:
+            # BTC: 1 lot = 1 BTC, pip value = $1 per pip per BTC
+            pip_value_usd = 1.0
+            standard_lot = 1.0  # 1 BTC
+        elif opp.symbol in ['GOLD', 'XAUUSD']:
+            # Gold: 1 lot = 100 oz, pip value ≈ $10 per pip
+            pip_value_usd = 10.0
+            standard_lot = 1.0  # 100 oz
+        elif opp.symbol in ['EURUSD']:
+            # Forex: 1 lot = 100,000, pip value = $10 per pip
+            pip_value_usd = 10.0
+            standard_lot = 1.0  # 100k units
+        elif opp.symbol in ['OIL', 'USOIL']:
+            # Oil: 1 lot = 1000 barrels, pip value ≈ $10 per pip
+            pip_value_usd = 10.0
+            standard_lot = 1.0  # 1000 barrels
+        else:
+            pip_value_usd = 10.0
+            standard_lot = 1.0
+
+        # Calculate lot size
+        risk_pips = opp.risk_pips
+        if risk_pips <= 0:
+            risk_pips = 10  # Default fallback
+
+        # Lot size = Risk USD / (Risk Pips * Pip Value)
+        lot_size = risk_usd / (risk_pips * pip_value_usd)
+
+        # Round to sensible values
+        if opp.symbol == 'BTC':
+            lot_size = round(lot_size, 4)  # 0.0001 BTC minimum
+            min_lot = 0.001
+        elif opp.symbol in ['GOLD', 'XAUUSD']:
+            lot_size = round(lot_size, 2)  # 0.01 lot
+            min_lot = 0.01
+        else:
+            lot_size = round(lot_size, 2)  # 0.01 lot
+            min_lot = 0.01
+
+        # Ensure minimum lot size
+        lot_size = max(lot_size, min_lot)
+
+        # Calculate potential profits
+        profit_tp1 = opp.reward_pips * pip_value_usd * lot_size
+        profit_tp2 = opp.reward_pips * 1.5 * pip_value_usd * lot_size
+        profit_tp3 = opp.reward_pips * 2.0 * pip_value_usd * lot_size
+
+        return {
+            'lot_size': lot_size,
+            'risk_usd': risk_usd,
+            'profit_tp1': profit_tp1,
+            'profit_tp2': profit_tp2,
+            'profit_tp3': profit_tp3,
+            'pip_value_usd': pip_value_usd
+        }
+
+    def get_entry_decision(self, opp: ScalpOpportunity) -> Dict:
+        """
+        Determine clear entry decision: Enter Now or Wait
+
+        Returns:
+            Dict with decision, wait_minutes, reason
+        """
+        # Strong signals with high confidence = Enter Now
+        strong_signals = [ScalpSignal.STRONG_BUY, ScalpSignal.STRONG_SELL]
+        medium_signals = [ScalpSignal.BUY, ScalpSignal.SELL]
+
+        decision = {
+            'enter_now': False,
+            'wait_minutes': 0,
+            'reason': '',
+            'emoji': ''
+        }
+
+        # Check urgency
+        if opp.urgency == "فوري ⚡":
+            decision['enter_now'] = True
+            decision['reason'] = "الزخم قوي والحجم مرتفع"
+            decision['emoji'] = "⚡"
+            decision['wait_minutes'] = 0
+
+        elif opp.urgency == "قريب 🔔":
+            if opp.signal in strong_signals and opp.confidence >= 60:
+                decision['enter_now'] = True
+                decision['reason'] = "إشارة قوية مع ثقة عالية"
+                decision['emoji'] = "✅"
+                decision['wait_minutes'] = 0
+            else:
+                decision['enter_now'] = False
+                decision['reason'] = "انتظر تأكيد الشمعة التالية"
+                decision['emoji'] = "⏳"
+                decision['wait_minutes'] = 5 if opp.timeframe == 'M5' else 15
+
+        else:  # "انتظار ⏳"
+            decision['enter_now'] = False
+
+            # Calculate wait time based on conditions
+            if opp.confidence < 40:
+                decision['wait_minutes'] = 30
+                decision['reason'] = "الثقة منخفضة - انتظر إشارة أوضح"
+            elif opp.volume_ratio < 1.0:
+                decision['wait_minutes'] = 15
+                decision['reason'] = "الحجم ضعيف - انتظر نشاط أكبر"
+            elif 40 < opp.rsi < 60:
+                decision['wait_minutes'] = 20
+                decision['reason'] = "RSI محايد - انتظر اتجاه واضح"
+            else:
+                decision['wait_minutes'] = 10
+                decision['reason'] = "انتظر تأكيد إضافي"
+
+            decision['emoji'] = "⏳"
+
+        return decision
+
+    def format_opportunity(self, opp: ScalpOpportunity, account_balance: float = 1000) -> str:
+        """Format single opportunity as detailed message with actionable advice"""
         is_buy = 'BUY' in opp.signal.value
         direction_icon = "🟢📈" if is_buy else "🔴📉"
         direction_text = "شراء" if is_buy else "بيع"
 
+        # Get entry decision
+        decision = self.get_entry_decision(opp)
+
+        # Get lot size calculation
+        lot_info = self.calculate_lot_size(opp, account_balance)
+
         msg = f"{direction_icon} *سكالبينج {opp.symbol}*\n"
         msg += f"━━━━━━━━━━━━━━━━━━━━\n\n"
+
+        # ========== القرار الواضح ==========
+        msg += f"*📍 القرار:*\n"
+        if decision['enter_now']:
+            msg += f"```\n"
+            msg += f"🚀 ادخل الآن! {decision['emoji']}\n"
+            msg += f"السبب: {decision['reason']}\n"
+            msg += f"```\n\n"
+        else:
+            msg += f"```\n"
+            msg += f"⏳ انتظر!\n"
+            msg += f"المدة: ~{decision['wait_minutes']} دقيقة\n"
+            msg += f"السبب: {decision['reason']}\n"
+            msg += f"```\n\n"
 
         msg += f"*الإشارة:* {opp.signal.value}\n"
         msg += f"*النوع:* {opp.setup_type.value}\n"
         msg += f"*الفريم:* {opp.timeframe}\n"
-        msg += f"*الثقة:* {opp.confidence:.0f}%\n"
-        msg += f"*الأولوية:* {opp.urgency}\n\n"
+        msg += f"*الثقة:* {opp.confidence:.0f}%\n\n"
 
-        msg += f"*📊 التفاصيل الفنية:*\n"
+        # ========== اللوت والربح المتوقع ==========
+        msg += f"*💰 اللوت والربح المتوقع:*\n"
         msg += f"```\n"
-        msg += f"السعر الحالي: {opp.current_price:.2f}\n"
-        msg += f"RSI(7):       {opp.rsi:.1f}\n"
-        msg += f"EMA20:        {opp.ema_20:.2f}\n"
-        msg += f"ATR:          {opp.atr:.2f}\n"
-        msg += f"الحجم:        {opp.volume_ratio:.1f}x\n"
+        msg += f"رأس المال:    ${account_balance:,.0f}\n"
+        msg += f"اللوت المقترح: {lot_info['lot_size']:.4f}\n"
+        msg += f"المخاطرة:      ${lot_info['risk_usd']:.2f} (1%)\n"
+        msg += f"─────────────────────\n"
+        msg += f"الربح هدف 1:   ${lot_info['profit_tp1']:.2f} ✓\n"
+        msg += f"الربح هدف 2:   ${lot_info['profit_tp2']:.2f} ✓✓\n"
+        msg += f"الربح هدف 3:   ${lot_info['profit_tp3']:.2f} ✓✓✓\n"
         msg += f"```\n\n"
 
         msg += f"*🎯 خطة الصفقة ({direction_text}):*\n"

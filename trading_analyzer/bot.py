@@ -5,6 +5,15 @@ Telegram Bot - Simple Trading Analyzer
 Lightweight - Runs only when needed
 """
 import os
+import sys
+
+# Try to load .env file
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
+
 import telebot
 from mtf_analyzer import MTFDecisionEngine, Decision, Direction
 from scalping import create_scalping_engine
