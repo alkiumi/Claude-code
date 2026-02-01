@@ -2,10 +2,12 @@
 """
 Telegram Bot - Multi-Timeframe Decision Engine
 H4 → H1 → M15 → M5
++ Smart Alerts System
 """
 import os
 import telebot
 from mtf_analyzer import MTFDecisionEngine, Decision, Direction
+from smart_alerts import create_alert_manager, AlertTrigger
 
 
 DECISION_AR = {
@@ -181,37 +183,33 @@ def run_bot(token: str):
         msg = """🎯 *محرك القرارات متعدد الفريمات*
 _Multi-Timeframe Decision Engine_
 
-*الفريمات:*
-H4 → السياق الأكبر
-H1 → الاتجاه
-M15 → القرار
-M5 → التوقيت
-
-*الأوامر:*
+*📊 التحليل:*
 /btc - تحليل البيتكوين
 /gold - تحليل الذهب
 /eurusd - تحليل EUR/USD
 /scan - فحص جميع الأسواق
+/a SYMBOL - تحليل أي رمز
+
+*🔔 التنبيهات الذكية:*
+/alerts - عرض التنبيهات النشطة
+/alert\_price BTC 100000 above - تنبيه سعر
+/alert\_rsi BTC oversold - تنبيه RSI
+/alert\_execute BTC - تنبيه قرار التنفيذ
+/alert\_ai BTC buy - تنبيه إشارة AI
+/alert\_delete ID - حذف تنبيه
+/alert\_start - تشغيل المسح التلقائي
+/alert\_check - فحص فوري
 
 *القرارات:*
 🟢 تنفيذ - 4/4 فريمات + 5/6 مراحل
 🟡 استعد - توافق جزئي
 🔴 انتظر - لا توافق
 
-*المراحل الست:*
-1️⃣ السياق (H4+H1)
-2️⃣ الموقع (EMAs)
-3️⃣ الزخم (RSI)
-4️⃣ السلوك (الشموع)
-5️⃣ المستويات (S/R)
-6️⃣ المخاطرة (R:R)
-
 *🤖 الذكاء الاصطناعي:*
 • مؤشر الخوف/الطمع
-• تحليل المشاعر
 • التعرف على الأنماط
 • توقع الاتجاه
-• مستويات الدعم/المقاومة
+• الدعم/المقاومة
 
 _الحفاظ على رأس المال أولاً._"""
         bot.reply_to(message, msg, parse_mode='Markdown')
@@ -307,6 +305,249 @@ _الحفاظ على رأس المال أولاً._"""
             bot.send_message(message.chat.id, msg, parse_mode='Markdown')
         except Exception as e:
             bot.send_message(message.chat.id, f"❌ خطأ: {str(e)}")
+
+    # ============ SMART ALERTS SYSTEM ============
+
+    # Initialize alert manager
+    alert_manager = create_alert_manager(scan_interval=300)  # 5 minutes
+    user_chats = {}  # Store user chat IDs
+
+    # Alert notification callback
+    def send_alert_notification(trigger: AlertTrigger):
+        """Send alert notification to user"""
+        user_id = trigger.alert.user_id
+        if user_id and user_id in user_chats:
+            chat_id = user_chats[user_id]
+            try:
+                msg = f"🚨 *تنبيه!*\n\n"
+                msg += f"*{trigger.alert.symbol}*\n"
+                msg += f"{trigger.message}\n\n"
+                msg += f"⏰ {trigger.trigger_time[:19]}"
+                bot.send_message(chat_id, msg, parse_mode='Markdown')
+            except Exception as e:
+                print(f"Error sending alert: {e}")
+
+    alert_manager.add_notification_callback(send_alert_notification)
+
+    @bot.message_handler(commands=['alerts'])
+    def list_alerts(message):
+        """List all active alerts"""
+        user_id = str(message.from_user.id)
+        user_chats[user_id] = message.chat.id
+
+        msg = alert_manager.format_alerts_list(user_id=user_id)
+        bot.reply_to(message, msg, parse_mode='Markdown')
+
+    @bot.message_handler(commands=['alert_price'])
+    def create_price_alert(message):
+        """Create price alert: /alert_price BTC 100000 above"""
+        user_id = str(message.from_user.id)
+        user_chats[user_id] = message.chat.id
+
+        parts = message.text.split()
+        if len(parts) < 4:
+            bot.reply_to(message,
+                "الاستخدام: `/alert_price SYMBOL PRICE above/below`\n"
+                "مثال: `/alert_price BTC 100000 above`",
+                parse_mode='Markdown')
+            return
+
+        try:
+            symbol = parts[1].upper()
+            if symbol == 'BTC':
+                symbol = 'BTC-USD'
+            elif symbol == 'GOLD':
+                symbol = 'GC=F'
+
+            price = float(parts[2])
+            above = parts[3].lower() in ['above', 'فوق', 'up', '1']
+
+            alert_id = alert_manager.create_price_alert(
+                symbol=symbol, price=price, above=above, user_id=user_id
+            )
+
+            direction = "فوق ⬆️" if above else "تحت ⬇️"
+            bot.reply_to(message,
+                f"✅ تم إنشاء تنبيه السعر\n\n"
+                f"🔔 `{alert_id[:8]}`\n"
+                f"📊 {symbol}\n"
+                f"💰 {direction} {price:,.2f}",
+                parse_mode='Markdown')
+        except Exception as e:
+            bot.reply_to(message, f"❌ خطأ: {str(e)}")
+
+    @bot.message_handler(commands=['alert_rsi'])
+    def create_rsi_alert(message):
+        """Create RSI alert: /alert_rsi BTC overbought"""
+        user_id = str(message.from_user.id)
+        user_chats[user_id] = message.chat.id
+
+        parts = message.text.split()
+        if len(parts) < 3:
+            bot.reply_to(message,
+                "الاستخدام: `/alert_rsi SYMBOL overbought/oversold`\n"
+                "مثال: `/alert_rsi BTC oversold`",
+                parse_mode='Markdown')
+            return
+
+        try:
+            symbol = parts[1].upper()
+            if symbol == 'BTC':
+                symbol = 'BTC-USD'
+
+            overbought = parts[2].lower() in ['overbought', 'تشبع_شرائي', 'ob', '1']
+
+            alert_id = alert_manager.create_rsi_alert(
+                symbol=symbol, overbought=overbought, user_id=user_id, repeat=True
+            )
+
+            condition = "تشبع شرائي 🔴" if overbought else "تشبع بيعي 🟢"
+            bot.reply_to(message,
+                f"✅ تم إنشاء تنبيه RSI\n\n"
+                f"🔔 `{alert_id[:8]}`\n"
+                f"📊 {symbol}\n"
+                f"📈 {condition}",
+                parse_mode='Markdown')
+        except Exception as e:
+            bot.reply_to(message, f"❌ خطأ: {str(e)}")
+
+    @bot.message_handler(commands=['alert_execute'])
+    def create_execute_alert(message):
+        """Create EXECUTE decision alert: /alert_execute BTC"""
+        user_id = str(message.from_user.id)
+        user_chats[user_id] = message.chat.id
+
+        parts = message.text.split()
+        if len(parts) < 2:
+            bot.reply_to(message,
+                "الاستخدام: `/alert_execute SYMBOL`\n"
+                "مثال: `/alert_execute BTC`",
+                parse_mode='Markdown')
+            return
+
+        try:
+            symbol = parts[1].upper()
+            if symbol == 'BTC':
+                symbol = 'BTC-USD'
+            elif symbol == 'GOLD':
+                symbol = 'GC=F'
+
+            alert_id = alert_manager.create_decision_alert(
+                symbol=symbol, to_decision='EXECUTE', user_id=user_id, repeat=True
+            )
+
+            bot.reply_to(message,
+                f"✅ تم إنشاء تنبيه التنفيذ\n\n"
+                f"🔔 `{alert_id[:8]}`\n"
+                f"📊 {symbol}\n"
+                f"🟢 تنبيه عند قرار التنفيذ",
+                parse_mode='Markdown')
+        except Exception as e:
+            bot.reply_to(message, f"❌ خطأ: {str(e)}")
+
+    @bot.message_handler(commands=['alert_ai'])
+    def create_ai_alert(message):
+        """Create AI signal alert: /alert_ai BTC buy"""
+        user_id = str(message.from_user.id)
+        user_chats[user_id] = message.chat.id
+
+        parts = message.text.split()
+        if len(parts) < 3:
+            bot.reply_to(message,
+                "الاستخدام: `/alert_ai SYMBOL buy/sell/any`\n"
+                "مثال: `/alert_ai BTC buy`",
+                parse_mode='Markdown')
+            return
+
+        try:
+            symbol = parts[1].upper()
+            if symbol == 'BTC':
+                symbol = 'BTC-USD'
+
+            direction = parts[2].lower()
+            if direction in ['شراء', 'buy']:
+                direction = 'buy'
+            elif direction in ['بيع', 'sell']:
+                direction = 'sell'
+            else:
+                direction = 'any'
+
+            alert_id = alert_manager.create_ai_signal_alert(
+                symbol=symbol, threshold=40, direction=direction, user_id=user_id, repeat=True
+            )
+
+            dir_ar = {'buy': 'شراء 📈', 'sell': 'بيع 📉', 'any': 'أي اتجاه'}
+            bot.reply_to(message,
+                f"✅ تم إنشاء تنبيه AI\n\n"
+                f"🔔 `{alert_id[:8]}`\n"
+                f"📊 {symbol}\n"
+                f"🤖 إشارة {dir_ar.get(direction, direction)}",
+                parse_mode='Markdown')
+        except Exception as e:
+            bot.reply_to(message, f"❌ خطأ: {str(e)}")
+
+    @bot.message_handler(commands=['alert_delete', 'del_alert'])
+    def delete_alert(message):
+        """Delete alert: /alert_delete ALERT_ID"""
+        parts = message.text.split()
+        if len(parts) < 2:
+            bot.reply_to(message,
+                "الاستخدام: `/alert_delete ALERT_ID`\n"
+                "مثال: `/alert_delete abc123`",
+                parse_mode='Markdown')
+            return
+
+        alert_id = parts[1]
+
+        # Find full ID if partial
+        all_alerts = alert_manager.storage.alerts
+        full_id = None
+        for aid in all_alerts:
+            if aid.startswith(alert_id):
+                full_id = aid
+                break
+
+        if full_id and alert_manager.delete_alert(full_id):
+            bot.reply_to(message, f"✅ تم حذف التنبيه `{alert_id}`", parse_mode='Markdown')
+        else:
+            bot.reply_to(message, f"❌ لم يتم العثور على التنبيه")
+
+    @bot.message_handler(commands=['alert_check'])
+    def check_alerts_now(message):
+        """Manually check all alerts now"""
+        user_id = str(message.from_user.id)
+        user_chats[user_id] = message.chat.id
+
+        bot.reply_to(message, "⏳ جاري فحص التنبيهات...")
+
+        try:
+            triggered = alert_manager.check_now()
+            if triggered:
+                msg = f"🚨 *تم تفعيل {len(triggered)} تنبيه(ات)*\n\n"
+                for t in triggered:
+                    msg += f"• {t.alert.symbol}: {t.message}\n"
+                bot.send_message(message.chat.id, msg, parse_mode='Markdown')
+            else:
+                bot.send_message(message.chat.id, "✅ لا توجد تنبيهات مفعّلة حالياً")
+        except Exception as e:
+            bot.send_message(message.chat.id, f"❌ خطأ: {str(e)}")
+
+    @bot.message_handler(commands=['alert_start'])
+    def start_scanner(message):
+        """Start background alert scanner"""
+        user_id = str(message.from_user.id)
+        user_chats[user_id] = message.chat.id
+
+        alert_manager.start_scanner()
+        bot.reply_to(message,
+            "✅ تم تشغيل المسح التلقائي للتنبيهات\n"
+            "⏱️ الفحص كل 5 دقائق")
+
+    @bot.message_handler(commands=['alert_stop'])
+    def stop_scanner(message):
+        """Stop background alert scanner"""
+        alert_manager.stop_scanner()
+        bot.reply_to(message, "⏹️ تم إيقاف المسح التلقائي")
 
     print("MTF Bot is running...")
     bot.infinity_polling()
