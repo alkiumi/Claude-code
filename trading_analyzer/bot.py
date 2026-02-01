@@ -103,6 +103,46 @@ def format_mtf_analysis(result) -> str:
 
     msg += "\n"
 
+    # AI/ML Analysis
+    if hasattr(result, 'ai_analysis') and result.ai_analysis:
+        ai = result.ai_analysis
+        msg += "━━━━━━━━━━━━━━━━━━━━\n"
+        msg += "*🤖 تحليل الذكاء الاصطناعي:*\n\n"
+
+        # Fear & Greed
+        fng = ai.sentiment.fear_greed_index
+        fng_emoji = "😱" if fng < 25 else "😰" if fng < 45 else "😐" if fng < 55 else "😊" if fng < 75 else "🤑"
+        msg += f"*مؤشر الخوف/الطمع:* {fng_emoji} {fng}/100 ({ai.sentiment.fear_greed_label.value})\n"
+
+        # Sentiment Score
+        sent_score = ai.sentiment.sentiment_score
+        sent_bar = "🟢" * int((sent_score + 100) / 40) + "⚪" * (5 - int((sent_score + 100) / 40))
+        msg += f"*المشاعر:* {sent_bar} ({sent_score:+.0f})\n"
+
+        # Patterns
+        if ai.patterns.patterns_found:
+            patterns_str = ", ".join([p.value for p, _ in ai.patterns.patterns_found[:3]])
+            msg += f"*الأنماط:* {patterns_str}\n"
+            msg += f"*اتجاه الأنماط:* {ai.patterns.pattern_bias}\n"
+
+        # ML Prediction
+        msg += f"\n*التنبؤ:* {ai.ml_prediction.trend_prediction.value}\n"
+        msg += f"*الثقة:* {ai.ml_prediction.confidence:.0f}%\n"
+
+        # Support/Resistance
+        if ai.ml_prediction.support_levels:
+            support_str = ", ".join([f"{s:.0f}" for s in ai.ml_prediction.support_levels[:2]])
+            msg += f"*الدعم:* {support_str}\n"
+        if ai.ml_prediction.resistance_levels:
+            resist_str = ", ".join([f"{r:.0f}" for r in ai.ml_prediction.resistance_levels[:2]])
+            msg += f"*المقاومة:* {resist_str}\n"
+
+        # AI Recommendation
+        msg += f"\n{ai.ai_recommendation}\n"
+        msg += f"*درجة AI:* {ai.ai_score:+.0f}/100\n"
+
+    msg += "\n"
+
     # Trade plan if EXECUTE
     if result.decision == Decision.EXECUTE and result.direction:
         msg += "━━━━━━━━━━━━━━━━━━━━\n"
@@ -165,6 +205,13 @@ M5 → التوقيت
 4️⃣ السلوك (الشموع)
 5️⃣ المستويات (S/R)
 6️⃣ المخاطرة (R:R)
+
+*🤖 الذكاء الاصطناعي:*
+• مؤشر الخوف/الطمع
+• تحليل المشاعر
+• التعرف على الأنماط
+• توقع الاتجاه
+• مستويات الدعم/المقاومة
 
 _الحفاظ على رأس المال أولاً._"""
         bot.reply_to(message, msg, parse_mode='Markdown')

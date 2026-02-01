@@ -6,13 +6,19 @@ Data Sources:
 - Binance API (Crypto - Real-time)
 - Alpha Vantage (Forex)
 - Yahoo Finance (Fallback)
+
+AI/ML Features:
+- Sentiment Analysis (Fear & Greed, News)
+- Pattern Recognition
+- Trend Prediction
 """
 import pandas as pd
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Optional, List, Dict
+from typing import Optional, List, Dict, Any
 from indicators import Indicators
 from data_providers import MultiSourceDataManager, create_data_manager
+from sentiment_ml import SentimentMLEngine, create_sentiment_ml_engine, AIAnalysis
 
 
 class Decision(Enum):
@@ -109,6 +115,9 @@ class MTFAnalysis:
     risk_reward: Optional[float] = None
     hold_time: Optional[str] = None
 
+    # AI/ML Analysis
+    ai_analysis: Optional[Any] = None
+
 
 class MTFDecisionEngine:
     """
@@ -122,11 +131,17 @@ class MTFDecisionEngine:
     - Binance API (Crypto - Real-time)
     - Alpha Vantage (Forex)
     - Yahoo Finance (Fallback)
+
+    AI/ML Features:
+    - Sentiment Analysis
+    - Pattern Recognition
+    - Trend Prediction
     """
 
-    def __init__(self, symbol: str, alpha_vantage_key: str = None):
+    def __init__(self, symbol: str, alpha_vantage_key: str = None, cryptopanic_token: str = None):
         self.symbol = symbol
         self.data_manager = create_data_manager(alpha_vantage_key)
+        self.ai_engine = create_sentiment_ml_engine(cryptopanic_token)
         self.data = None
         self.tf_analyses = {}
 
@@ -165,6 +180,16 @@ class MTFDecisionEngine:
         if decision == Decision.EXECUTE and direction != Direction.NONE:
             entry_zone, sl, target, rr, hold_time = self._build_trade_plan(direction)
 
+        # Step 7: AI/ML Analysis
+        ai_analysis = None
+        try:
+            # Use H1 data for AI analysis (good balance of data)
+            ai_df = self.data.get('H1')
+            if ai_df is not None and len(ai_df) >= 50:
+                ai_analysis = self.ai_engine.analyze(self.symbol, ai_df)
+        except Exception as e:
+            print(f"AI analysis error: {e}")
+
         return MTFAnalysis(
             symbol=self.data['symbol'],
             fetch_time=self.data['fetch_time'],
@@ -188,7 +213,8 @@ class MTFDecisionEngine:
             stop_loss=sl,
             target=target,
             risk_reward=rr,
-            hold_time=hold_time
+            hold_time=hold_time,
+            ai_analysis=ai_analysis
         )
 
     def _analyze_timeframe(self, tf: str, df: pd.DataFrame) -> TimeframeAnalysis:
