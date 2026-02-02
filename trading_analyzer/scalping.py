@@ -630,18 +630,11 @@ class ScalpingEngine:
         # Lot size = Risk USD / (Risk Pips * Pip Value)
         lot_size = risk_usd / (risk_pips * pip_value_usd)
 
-        # Round to sensible values
-        if opp.symbol == 'BTC':
-            lot_size = round(lot_size, 4)  # 0.0001 BTC minimum
-            min_lot = 0.001
-        elif opp.symbol in ['GOLD', 'XAUUSD']:
-            lot_size = round(lot_size, 2)  # 0.01 lot
-            min_lot = 0.01
-        else:
-            lot_size = round(lot_size, 2)  # 0.01 lot
-            min_lot = 0.01
+        # Round to sensible values - MINIMUM 0.01 for all
+        lot_size = round(lot_size, 2)
+        min_lot = 0.01
 
-        # Ensure minimum lot size
+        # Ensure minimum lot size is always 0.01
         lot_size = max(lot_size, min_lot)
 
         # Calculate potential profits
@@ -717,80 +710,41 @@ class ScalpingEngine:
         return decision
 
     def format_opportunity(self, opp: ScalpOpportunity, account_balance: float = 100) -> str:
-        """Format single opportunity as detailed message with actionable advice"""
+        """Format single opportunity - Clean & Simple"""
         is_buy = 'BUY' in opp.signal.value
-        direction_icon = "🟢📈" if is_buy else "🔴📉"
+        direction_icon = "🟢" if is_buy else "🔴"
         direction_text = "شراء" if is_buy else "بيع"
 
-        # Get entry decision
-        decision = self.get_entry_decision(opp)
-
-        # Get lot size calculation
+        # Get lot size (minimum 0.01)
         lot_info = self.calculate_lot_size(opp, account_balance)
+        lot_size = max(0.01, lot_info['lot_size'])
 
-        msg = f"{direction_icon} *سكالبينج {opp.symbol}*\n"
+        # Get main reason
+        reason = opp.reasons[0] if opp.reasons else opp.setup_type.value
+
+        msg = f"{direction_icon} *{opp.symbol} - {direction_text}*\n"
         msg += f"━━━━━━━━━━━━━━━━━━━━\n\n"
 
-        # ========== القرار الواضح ==========
-        msg += f"*📍 القرار:*\n"
-        if decision['enter_now']:
-            msg += f"```\n"
-            msg += f"🚀 ادخل الآن! {decision['emoji']}\n"
-            msg += f"السبب: {decision['reason']}\n"
-            msg += f"```\n\n"
-        else:
-            msg += f"```\n"
-            msg += f"⏳ انتظر!\n"
-            msg += f"المدة: ~{decision['wait_minutes']} دقيقة\n"
-            msg += f"السبب: {decision['reason']}\n"
-            msg += f"```\n\n"
-
-        msg += f"*الإشارة:* {opp.signal.value}\n"
-        msg += f"*النوع:* {opp.setup_type.value}\n"
-        msg += f"*الفريم:* {opp.timeframe}\n"
-        msg += f"*الثقة:* {opp.confidence:.0f}%\n\n"
-
-        # ========== اللوت والربح المتوقع ==========
-        msg += f"*💰 اللوت والربح المتوقع:*\n"
+        # Trade Plan - Clean format
         msg += f"```\n"
-        msg += f"رأس المال:    ${account_balance:,.0f}\n"
-        msg += f"اللوت المقترح: {lot_info['lot_size']:.4f}\n"
-        msg += f"المخاطرة:      ${lot_info['risk_usd']:.2f} (2%)\n"
-        msg += f"─────────────────────\n"
-        msg += f"الربح هدف 1:   ${lot_info['profit_tp1']:.2f} ✓\n"
-        msg += f"الربح هدف 2:   ${lot_info['profit_tp2']:.2f} ✓✓\n"
-        msg += f"الربح هدف 3:   ${lot_info['profit_tp3']:.2f} ✓✓✓\n"
+        msg += f"الدخول:   {opp.entry_price:.2f}\n"
+        msg += f"━━━━━━━━━━━━━━━━━━\n"
+        msg += f"هدف 1:    {opp.take_profit_1:.2f}\n"
+        msg += f"هدف 2:    {opp.take_profit_2:.2f}\n"
+        msg += f"هدف 3:    {opp.take_profit_3:.2f}\n"
+        msg += f"━━━━━━━━━━━━━━━━━━\n"
+        msg += f"وقف:      {opp.stop_loss:.2f}\n"
+        msg += f"━━━━━━━━━━━━━━━━━━\n"
+        msg += f"اللوت:    {lot_size:.2f}\n"
         msg += f"```\n\n"
 
-        msg += f"*🎯 خطة الصفقة ({direction_text}):*\n"
-        msg += f"```\n"
-        msg += f"الدخول:    {opp.entry_price:.2f}\n"
-        msg += f"الوقف:     {opp.stop_loss:.2f}\n"
-        msg += f"الهدف 1:   {opp.take_profit_1:.2f} (1:1)\n"
-        msg += f"الهدف 2:   {opp.take_profit_2:.2f} (1:1.5)\n"
-        msg += f"الهدف 3:   {opp.take_profit_3:.2f} (1:2)\n"
-        msg += f"```\n\n"
+        # Reason in one line
+        msg += f"📌 *السبب:* {reason}\n\n"
 
-        msg += f"*📐 المخاطرة:*\n"
-        msg += f"• المخاطرة: {opp.risk_pips:.1f} نقطة ({opp.risk_percent:.2f}%)\n"
-        msg += f"• العائد: {opp.reward_pips:.1f} نقطة\n"
-        msg += f"• النسبة: 1:{opp.risk_reward:.1f}\n\n"
-
-        if opp.reasons:
-            msg += f"*✅ الأسباب:*\n"
-            for r in opp.reasons:
-                msg += f"  • {r}\n"
-            msg += "\n"
-
-        if opp.warnings:
-            msg += f"*⚠️ تحذيرات:*\n"
-            for w in opp.warnings:
-                msg += f"  • {w}\n"
-            msg += "\n"
-
-        msg += f"━━━━━━━━━━━━━━━━━━━━\n"
-        msg += f"⏱️ صالح لمدة: {opp.valid_for_minutes} دقيقة\n"
-        msg += f"_⚡ السكالبينج يتطلب سرعة في التنفيذ_"
+        # Quick stats
+        msg += f"الثقة: {opp.confidence:.0f}% | "
+        msg += f"المخاطرة: {opp.risk_percent:.1f}% | "
+        msg += f"النسبة: 1:{opp.risk_reward:.1f}\n"
 
         return msg
 

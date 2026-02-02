@@ -2,10 +2,19 @@
 """
 Telegram Bot - Simple Trading Analyzer
 ⚡ Scalping (M5/M15) + 📊 Full Analysis (MTF)
-Lightweight - Runs only when needed
+Stable version with auto-reconnect
 """
 import os
 import sys
+import time
+import logging
+
+# Setup logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
 
 # Try to load .env file
 try:
@@ -15,8 +24,13 @@ except ImportError:
     pass
 
 import telebot
+from telebot import apihelper
 from mtf_analyzer import MTFDecisionEngine, Decision, Direction
 from scalping import create_scalping_engine
+
+# Increase timeout for requests
+apihelper.RETRY_ON_ERROR = True
+apihelper.READ_TIMEOUT = 30
 
 
 def format_analysis(result, account_balance: float = 100) -> str:
@@ -60,55 +74,38 @@ def format_analysis(result, account_balance: float = 100) -> str:
     # Trade plan with $100 budget
     if result.decision == Decision.EXECUTE and result.direction:
         d = "🟢 شراء" if result.direction == Direction.BUY else "🔴 بيع"
-        msg += f"\n*الصفقة:* {d}\n"
-
-        # Get current price from M5 data
         current_price = result.m5.price if result.m5 else 0
 
         if result.stop_loss and current_price > 0:
-            msg += f"الدخول: `{current_price:.2f}`\n"
-            msg += f"الوقف: `{result.stop_loss:.2f}`\n"
-
-            # Calculate risk in pips/points
             risk_points = abs(current_price - result.stop_loss)
-            risk_percent_price = (risk_points / current_price) * 100
+            risk_usd = account_balance * 0.02
 
-            # Calculate lot size for $100 with 2% risk ($2)
-            risk_usd = account_balance * 0.02  # 2% risk = $2
-
-            # Determine pip value based on asset
             if 'BTC' in result.symbol:
-                pip_value = 1.0  # $1 per point per 0.001 BTC
-                lot_size = risk_usd / risk_points if risk_points > 0 else 0.001
-                lot_size = round(max(0.001, lot_size), 4)
-            else:  # Gold, etc
-                pip_value = 0.1  # $0.1 per 0.01 lot per point
-                lot_size = risk_usd / (risk_points * 10) if risk_points > 0 else 0.01
-                lot_size = round(max(0.01, lot_size), 2)
+                lot_size = max(0.001, round(risk_usd / risk_points, 4)) if risk_points > 0 else 0.001
+            else:
+                lot_size = max(0.01, round(risk_usd / (risk_points * 10), 2)) if risk_points > 0 else 0.01
 
-            msg += f"\n*💰 لرأس مال ${account_balance:.0f}:*\n"
+            # Calculate 3 targets
+            tp1 = current_price + risk_points if result.direction == Direction.BUY else current_price - risk_points
+            tp2 = current_price + (risk_points * 1.5) if result.direction == Direction.BUY else current_price - (risk_points * 1.5)
+            tp3 = current_price + (risk_points * 2) if result.direction == Direction.BUY else current_price - (risk_points * 2)
+
+            msg += f"\n*{d}*\n"
             msg += f"```\n"
-            msg += f"اللوت:    {lot_size}\n"
-            msg += f"المخاطرة: ${risk_usd:.2f} (2%)\n"
-
-        if result.target:
-            msg += f"الهدف: `{result.target:.2f}`\n"
-
-            # Calculate potential profit
-            if result.stop_loss and current_price > 0:
-                reward_points = abs(result.target - current_price)
-                if 'BTC' in result.symbol:
-                    profit = reward_points * lot_size
-                else:
-                    profit = reward_points * lot_size * 10
-                msg += f"الربح:    ${profit:.2f}\n"
-                msg += f"```\n"
+            msg += f"الدخول:  {current_price:.2f}\n"
+            msg += f"وقف:     {result.stop_loss:.2f}\n"
+            msg += f"هدف 1:   {tp1:.2f}\n"
+            msg += f"هدف 2:   {tp2:.2f}\n"
+            msg += f"هدف 3:   {tp3:.2f}\n"
+            msg += f"اللوت:   {lot_size}\n"
+            msg += f"```\n"
 
     return msg
 
 
 def run_bot(token: str):
-    bot = telebot.TeleBot(token)
+    """Run bot with auto-reconnect"""
+    bot = telebot.TeleBot(token, threaded=False)
     scalper = create_scalping_engine()
 
     @bot.message_handler(commands=['start', 'help'])
@@ -131,14 +128,13 @@ def run_bot(token: str):
 🟢 شراء | 🔴 بيع | ⚪ انتظر"""
         bot.reply_to(message, msg, parse_mode='Markdown')
 
-    # === SCALPING ===
-
     @bot.message_handler(commands=['scalp'])
     def scalp(message):
         bot.reply_to(message, "⚡ جاري الفحص...")
         try:
             bot.send_message(message.chat.id, scalper.quick_scan(), parse_mode='Markdown')
         except Exception as e:
+            logger.error(f"Scalp error: {e}")
             bot.send_message(message.chat.id, f"❌ {e}")
 
     @bot.message_handler(commands=['s'])
@@ -163,9 +159,8 @@ def run_bot(token: str):
             else:
                 bot.send_message(message.chat.id, f"📭 لا توجد فرصة لـ {asset}")
         except Exception as e:
+            logger.error(f"S command error: {e}")
             bot.send_message(message.chat.id, f"❌ {e}")
-
-    # === FULL ANALYSIS ===
 
     @bot.message_handler(commands=['btc'])
     def btc(message):
@@ -174,6 +169,7 @@ def run_bot(token: str):
             result = MTFDecisionEngine('BTC-USD').analyze()
             bot.send_message(message.chat.id, format_analysis(result), parse_mode='Markdown')
         except Exception as e:
+            logger.error(f"BTC error: {e}")
             bot.send_message(message.chat.id, f"❌ {e}")
 
     @bot.message_handler(commands=['gold'])
@@ -183,6 +179,7 @@ def run_bot(token: str):
             result = MTFDecisionEngine('GC=F').analyze()
             bot.send_message(message.chat.id, format_analysis(result), parse_mode='Markdown')
         except Exception as e:
+            logger.error(f"Gold error: {e}")
             bot.send_message(message.chat.id, f"❌ {e}")
 
     @bot.message_handler(commands=['scan'])
@@ -198,15 +195,22 @@ def run_bot(token: str):
                 msg += f"❌ *{name}*\n"
         bot.send_message(message.chat.id, msg, parse_mode='Markdown')
 
+    # Main polling loop with reconnect
+    logger.info("Bot starting...")
     print("Bot running...")
+
     while True:
         try:
-            bot.infinity_polling(timeout=60, long_polling_timeout=30)
+            bot.polling(none_stop=True, interval=1, timeout=60)
+        except KeyboardInterrupt:
+            logger.info("Bot stopped by user")
+            break
         except Exception as e:
-            print(f"Bot error: {e}")
-            import time
-            time.sleep(5)
-            print("Restarting bot...")
+            logger.error(f"Polling error: {e}")
+            print(f"Error: {e}")
+            print("Reconnecting in 10 seconds...")
+            time.sleep(10)
+            continue
 
 
 if __name__ == "__main__":
