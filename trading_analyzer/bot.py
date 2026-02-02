@@ -1,13 +1,11 @@
 #!/usr/bin/env python3
 """
-Telegram Bot - Trading Analyzer (Stable Version)
+Telegram Bot - Trading Analyzer
 """
 import os
 import sys
 import time
-import traceback
 
-# Load environment
 try:
     from dotenv import load_dotenv
     load_dotenv()
@@ -16,16 +14,13 @@ except:
 
 import telebot
 
-# Get token
 TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN')
 if not TOKEN:
     print("ERROR: Set TELEGRAM_BOT_TOKEN")
     sys.exit(1)
 
-# Create bot
 bot = telebot.TeleBot(TOKEN, parse_mode='Markdown')
 
-# Lazy load heavy modules
 scalper = None
 def get_scalper():
     global scalper
@@ -52,12 +47,9 @@ def cmd_scalp_asset(msg):
     try:
         parts = msg.text.split()
         asset = parts[1].upper() if len(parts) > 1 else 'BTC'
-
         bot.reply_to(msg, f"⚡ تحليل {asset}...")
-
         engine = get_scalper()
         opp = engine.analyze_scalp(asset, 'M15')
-
         if opp:
             bot.send_message(msg.chat.id, engine.format_opportunity(opp))
         else:
@@ -81,21 +73,49 @@ def cmd_btc(msg):
         from mtf_analyzer import MTFDecisionEngine, Decision, Direction
         result = MTFDecisionEngine('BTC-USD').analyze()
 
-        # Simple format
         icon = "🟢" if result.decision == Decision.EXECUTE else "🟡" if result.decision == Decision.PREPARE else "🔴"
-        text = f"{icon} *BTC-USD*\n"
-        text += f"التوافق: {result.alignment_score}/4\n"
-        text += f"الاتجاه: {result.overall_bias.value}\n"
+        d_text = "تنفيذ" if result.decision == Decision.EXECUTE else "استعد" if result.decision == Decision.PREPARE else "انتظر"
 
-        if result.decision == Decision.EXECUTE:
-            d = "شراء" if result.direction == Direction.BUY else "بيع"
-            text += f"\n*الصفقة: {d}*\n"
-            if result.m5:
-                text += f"السعر: `{result.m5.price:.2f}`\n"
-            if result.stop_loss:
-                text += f"الوقف: `{result.stop_loss:.2f}`\n"
-            if result.target:
-                text += f"الهدف: `{result.target:.2f}`\n"
+        text = f"{icon} *{d_text}*\n"
+        text += f"━━━━━━━━━━━━━━━━━━━━\n"
+        text += f"*BTC-USD*\n"
+        text += f"التوافق: {result.alignment_score}/4\n"
+        text += f"الاتجاه: {result.overall_bias.value}\n\n"
+
+        # Always show trade details if there's a direction
+        if result.overall_bias != Direction.NEUTRAL:
+            direction = "شراء 🟢" if result.overall_bias == Direction.BUY else "بيع 🔴"
+            price = result.m5.price if result.m5 else 0
+
+            if price > 0:
+                # Calculate levels based on ATR
+                atr = result.m5.atr if result.m5 else price * 0.01
+
+                if result.overall_bias == Direction.BUY:
+                    entry = price
+                    sl = price - (atr * 1.5)
+                    tp1 = price + (atr * 1.0)
+                    tp2 = price + (atr * 1.5)
+                    tp3 = price + (atr * 2.0)
+                else:
+                    entry = price
+                    sl = price + (atr * 1.5)
+                    tp1 = price - (atr * 1.0)
+                    tp2 = price - (atr * 1.5)
+                    tp3 = price - (atr * 2.0)
+
+                text += f"*الصفقة: {direction}*\n"
+                text += f"```\n"
+                text += f"الدخول:  {entry:.2f}\n"
+                text += f"━━━━━━━━━━━━━━━━\n"
+                text += f"هدف 1:   {tp1:.2f}\n"
+                text += f"هدف 2:   {tp2:.2f}\n"
+                text += f"هدف 3:   {tp3:.2f}\n"
+                text += f"━━━━━━━━━━━━━━━━\n"
+                text += f"وقف:     {sl:.2f}\n"
+                text += f"━━━━━━━━━━━━━━━━\n"
+                text += f"اللوت:   0.01\n"
+                text += f"```\n"
 
         bot.send_message(msg.chat.id, text)
     except Exception as e:
@@ -109,19 +129,48 @@ def cmd_gold(msg):
         result = MTFDecisionEngine('GC=F').analyze()
 
         icon = "🟢" if result.decision == Decision.EXECUTE else "🟡" if result.decision == Decision.PREPARE else "🔴"
-        text = f"{icon} *GOLD*\n"
-        text += f"التوافق: {result.alignment_score}/4\n"
-        text += f"الاتجاه: {result.overall_bias.value}\n"
+        d_text = "تنفيذ" if result.decision == Decision.EXECUTE else "استعد" if result.decision == Decision.PREPARE else "انتظر"
 
-        if result.decision == Decision.EXECUTE:
-            d = "شراء" if result.direction == Direction.BUY else "بيع"
-            text += f"\n*الصفقة: {d}*\n"
-            if result.m5:
-                text += f"السعر: `{result.m5.price:.2f}`\n"
-            if result.stop_loss:
-                text += f"الوقف: `{result.stop_loss:.2f}`\n"
-            if result.target:
-                text += f"الهدف: `{result.target:.2f}`\n"
+        text = f"{icon} *{d_text}*\n"
+        text += f"━━━━━━━━━━━━━━━━━━━━\n"
+        text += f"*GOLD*\n"
+        text += f"التوافق: {result.alignment_score}/4\n"
+        text += f"الاتجاه: {result.overall_bias.value}\n\n"
+
+        # Always show trade details if there's a direction
+        if result.overall_bias != Direction.NEUTRAL:
+            direction = "شراء 🟢" if result.overall_bias == Direction.BUY else "بيع 🔴"
+            price = result.m5.price if result.m5 else 0
+
+            if price > 0:
+                # Calculate levels based on ATR
+                atr = result.m5.atr if result.m5 else price * 0.005
+
+                if result.overall_bias == Direction.BUY:
+                    entry = price
+                    sl = price - (atr * 1.5)
+                    tp1 = price + (atr * 1.0)
+                    tp2 = price + (atr * 1.5)
+                    tp3 = price + (atr * 2.0)
+                else:
+                    entry = price
+                    sl = price + (atr * 1.5)
+                    tp1 = price - (atr * 1.0)
+                    tp2 = price - (atr * 1.5)
+                    tp3 = price - (atr * 2.0)
+
+                text += f"*الصفقة: {direction}*\n"
+                text += f"```\n"
+                text += f"الدخول:  {entry:.2f}\n"
+                text += f"━━━━━━━━━━━━━━━━\n"
+                text += f"هدف 1:   {tp1:.2f}\n"
+                text += f"هدف 2:   {tp2:.2f}\n"
+                text += f"هدف 3:   {tp3:.2f}\n"
+                text += f"━━━━━━━━━━━━━━━━\n"
+                text += f"وقف:     {sl:.2f}\n"
+                text += f"━━━━━━━━━━━━━━━━\n"
+                text += f"اللوت:   0.01\n"
+                text += f"```\n"
 
         bot.send_message(msg.chat.id, text)
     except Exception as e:
@@ -129,17 +178,22 @@ def cmd_gold(msg):
 
 def main():
     print("Bot starting...")
+    # Clear any pending updates first
+    try:
+        bot.get_updates(offset=-1, timeout=1)
+    except:
+        pass
 
     while True:
         try:
             print(f"[{time.strftime('%H:%M:%S')}] Polling...")
-            bot.polling(non_stop=False, interval=2, timeout=30)
+            bot.polling(non_stop=False, interval=3, timeout=60, skip_pending=True)
         except KeyboardInterrupt:
-            print("Stopped by user")
+            print("Stopped")
             break
         except Exception as e:
-            print(f"[{time.strftime('%H:%M:%S')}] Error: {e}")
-            time.sleep(5)
+            print(f"Error: {e}")
+            time.sleep(10)
 
 if __name__ == "__main__":
     main()
